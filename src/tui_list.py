@@ -1,7 +1,9 @@
 """PCM file browser – bottom-pane list TUI."""
 
+import fcntl
 import os
 import re
+import signal
 import sys
 import shutil
 import termios
@@ -197,6 +199,13 @@ class ListTUI:
         old = termios.tcgetattr(fd)
         tui_row = -1
 
+        # Self-pipe: SIGWINCH writes a byte here so select() wakes immediately.
+        sig_r, sig_w = os.pipe()
+        fl = fcntl.fcntl(sig_w, fcntl.F_GETFL)
+        fcntl.fcntl(sig_w, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+        old_wakeup   = signal.set_wakeup_fd(sig_w)
+        old_sigwinch = signal.signal(signal.SIGWINCH, lambda *_: None)
+
         try:
             tty.setraw(fd)
 
@@ -206,6 +215,20 @@ class ListTUI:
                 tui_row = bottom - TUI_H
 
             while True:
+                # Block until key input OR terminal resize signal
+                readable, _, _ = select.select([fd, sig_r], [], [])
+
+                if sig_r in readable:
+                    # Drain the pipe (may hold multiple signal bytes)
+                    try:
+                        os.read(sig_r, 256)
+                    except OSError:
+                        pass
+                    # Redraw with the new terminal width; tui_row stays valid
+                    self._goto_top(tui_row)
+                    self._draw(self._render())
+                    continue
+
                 key = read_key(fd)
 
                 if key in ('q', 'Q', 'ESC', 'CTRL_C'):
@@ -230,6 +253,10 @@ class ListTUI:
                 self._draw(self._render())
 
         finally:
+            signal.set_wakeup_fd(old_wakeup)
+            signal.signal(signal.SIGWINCH, old_sigwinch)
+            os.close(sig_r)
+            os.close(sig_w)
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
         # Clear TUI area and leave cursor at TUI start
