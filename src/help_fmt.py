@@ -3,7 +3,7 @@
 import re
 import argparse
 
-from ansi import (
+from .ansi import (
     supports_color,
     R,
     H_LABEL, H_PROG, H_BRACK, H_OPT, H_META, H_HELP, H_CMD,

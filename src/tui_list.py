@@ -7,11 +7,11 @@ import termios
 import tty
 import select
 
-from ansi import (
+from .ansi import (
     cuu, el, sgr,
     R, SEL, ROW_EVEN, ROW_ODD, BORDER, STATUS, COLHDR,
 )
-from pcm_utils import pcm_duration, fmt_size
+from .pcm_utils import pcm_duration, fmt_size
 
 MAX_VISIBLE = 15
 # top-border + status + col-header + MAX_VISIBLE rows + bottom-border

@@ -16,16 +16,21 @@ registered in `~/.bashrc`. No third-party packages are required.
 
 ## File structure
 
-| File | Responsibility |
-|---|---|
-| `ppcm.py` | CLI entry point: argument parsing, top-level routing |
-| `ansi.py` | ANSI escape primitives (`cuu`, `el`, `sgr`) and the colour palette |
-| `pcm_utils.py` | PCM metadata: `pcm_duration`, `fmt_size`, `scan_pcm` |
-| `tui_list.py` | `ListTUI` – bottom-pane file browser + `read_key` input reader |
-| `help_fmt.py` | `ColorHelpFormatter` – colourised argparse help (TTY-gated) |
+```
+ppcm/
+  CLAUDE.md          ← this file
+  ppcm.py            ← CLI entry point (thin: routing only)
+  src/               ← Python package (src/__init__.py present)
+    ansi.py          ← ANSI primitives (cuu, el, sgr) and colour palette
+    pcm_utils.py     ← PCM metadata: pcm_duration, fmt_size, scan_pcm
+    tui_list.py      ← ListTUI – bottom-pane file browser + read_key
+    help_fmt.py      ← ColorHelpFormatter – colourised argparse help (TTY-gated)
+```
 
-New screens or features should be placed in their own module and imported by
-`ppcm.py`. Keep `ppcm.py` thin (routing only).
+`ppcm.py` imports via `from src.<module> import …`.
+Modules inside `src/` use relative imports (`from .ansi import …`).
+
+New screens or features go in `src/tui_<name>.py` and are imported by `ppcm.py`.
 
 ---
 
@@ -39,7 +44,7 @@ All duration / size calculations assume:
 | Sample rate | 22 050 Hz |
 | Channels | 1 (mono) |
 
-Constants live in `pcm_utils.py` (`PCM_SAMPLE_RATE`, `PCM_CHANNELS`,
+Constants live in `src/pcm_utils.py` (`PCM_SAMPLE_RATE`, `PCM_CHANNELS`,
 `PCM_BYTES_PER_SAMPLE`).
 
 ---
@@ -62,7 +67,7 @@ hide previous terminal output, which contradicts the wizard-style requirement.
 ### Key input
 
 Raw mode is entered with `tty.setraw()` / `termios.tcgetattr()` (stdlib only).
-`read_key()` in `tui_list.py` returns symbolic names: `'UP'`, `'DOWN'`,
+`read_key()` in `src/tui_list.py` returns symbolic names: `'UP'`, `'DOWN'`,
 `'ENTER'`, `'ESC'`, `'CTRL_C'`, or the literal character.
 
 ### Colour
@@ -70,7 +75,7 @@ Raw mode is entered with `tty.setraw()` / `termios.tcgetattr()` (stdlib only).
 All colour output must be gated on `supports_color()` from `ansi.py`, which
 checks `sys.stdout.isatty()`. Never emit ANSI codes unconditionally.
 
-The palette is defined in `ansi.py`. Add new named constants there rather than
+The palette is defined in `src/ansi.py`. Add new named constants there rather than
 inlining `sgr(...)` calls in display logic.
 
 ---
@@ -93,7 +98,7 @@ directly. Spec TBD. Current placeholder: prints the selected path and exits.
 
 ## Adding a new screen
 
-1. Create `tui_<name>.py` with a class following the same lifecycle as
+1. Create `src/tui_<name>.py` with a class following the same lifecycle as
    `ListTUI` (reserve space → draw loop → cleanup → return result).
-2. Import and invoke it from `ppcm.py`.
+2. Import and invoke it from `ppcm.py` via `from src.tui_<name> import …`.
 3. Update this file.
