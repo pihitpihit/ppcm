@@ -211,13 +211,72 @@ class ListTUI:
         return self.selected
 
 
+# ─── Colored help formatter ──────────────────────────────────────────────────
+
+def _colorize_help(text: str) -> str:
+    import re
+
+    out = []
+    for line in text.split('\n'):
+
+        # "usage: ppcm [-h] [--version] [PATH]"
+        if line.startswith('usage:'):
+            rest = line[6:]
+            # brackets first (clean text – no ANSI interference)
+            rest = re.sub(r'(\[.*?\])', sgr(38, 5, 180) + r'\1' + R, rest)
+            # prog name (still uncolored at this point)
+            rest = re.sub(r'\bppcm\b', sgr(1, 38, 5, 255) + 'ppcm' + R, rest, count=1)
+            line = sgr(1, 38, 5, 74) + 'usage:' + R + rest
+
+        # section headers:  "positional arguments:"  "options:"
+        elif re.match(r'^[a-zA-Z][a-zA-Z ]*:$', line):
+            line = sgr(1, 38, 5, 74) + line + R
+
+        # argument/option rows  "  PATH  …"  "  -h, --help  …"
+        # (lowercase lines like "  ppcm …" fall through to the epilog handler)
+        elif re.match(r'^  (-|[A-Z])', line):
+            m = re.search(r'  +\S', line[2:])
+            if m:
+                split   = 2 + m.start()
+                opt_raw = line[:split]
+                hlp_raw = line[split:]
+                opt_raw = re.sub(r'(-{1,2}[\w-]+)', sgr(38, 5, 222) + r'\1' + R, opt_raw)
+                opt_raw = re.sub(r'\b([A-Z]{2,})\b',  sgr(38, 5, 116) + r'\1' + R, opt_raw)
+                line = opt_raw + sgr(38, 5, 245) + hlp_raw + R
+            else:
+                line = re.sub(r'(-{1,2}[\w-]+)', sgr(38, 5, 222) + r'\1' + R, line)
+                line = re.sub(r'\b([A-Z]{2,})\b',  sgr(38, 5, 116) + r'\1' + R, line)
+
+        # epilog example lines  "  ppcm ./audio/    scan …"
+        elif re.match(r'^  ppcm\b', line):
+            m = re.match(r'^(  ppcm.*?)(\s{2,})(.+)$', line)
+            if m:
+                cmd, spc, desc = m.groups()
+                cmd  = re.sub(r'\bppcm\b', sgr(38, 5, 114) + 'ppcm' + R, cmd, count=1)
+                line = cmd + spc + sgr(38, 5, 245) + desc + R
+            else:
+                line = re.sub(r'\bppcm\b', sgr(38, 5, 114) + 'ppcm' + R, line, count=1)
+
+        out.append(line)
+
+    return '\n'.join(out)
+
+
+class _ColorHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    def format_help(self) -> str:
+        text = super().format_help()
+        if supports_color():
+            text = _colorize_help(text)
+        return text
+
+
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
         prog='ppcm',
         description='PCM audio file player',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=_ColorHelpFormatter,
         epilog="""\
 examples:
   ppcm ./audio/          scan directory and browse PCM files
