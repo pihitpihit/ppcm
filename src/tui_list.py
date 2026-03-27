@@ -83,8 +83,9 @@ class ListTUI:
         lines.append(self._c((pos + " " * pad + hints)[:w].ljust(w), STATUS))
 
         # column header
-        path_w  = max(w - 22, 10)
-        col_hdr = f"  {'FILE':<{path_w}}{'SIZE':>8}{'DURATION':>12}"
+        num_w  = len(str(total))
+        path_w = max(w - (num_w + 4) - 20, 10)
+        col_hdr = f"  {'#':>{num_w}}  {'FILE':<{path_w}}{'SIZE':>8}{'DURATION':>12}"
         lines.append(self._c(col_hdr[:w].ljust(w), COLHDR))
 
         # file entries
@@ -105,7 +106,7 @@ class ListTUI:
             if len(rel) > path_w:
                 rel = "…" + rel[-(path_w - 1):]
 
-            row = f"  {rel:<{path_w}}{sz_str:>8}{dur_str:>12}"
+            row = f"  {idx + 1:>{num_w}}  {rel:<{path_w}}{sz_str:>8}{dur_str:>12}"
             row = row[:w].ljust(w)
 
             if is_cur:
@@ -149,15 +150,17 @@ class ListTUI:
                 if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                     break
                 elif key in ('k', 'UP'):
-                    if self.cursor > 0:
-                        self.cursor -= 1
-                        if self.cursor < self.offset:
-                            self.offset = self.cursor
+                    self.cursor = (self.cursor - 1) % len(self.files)
+                    if self.cursor < self.offset:
+                        self.offset = self.cursor
+                    elif self.cursor == len(self.files) - 1:
+                        self.offset = max(0, len(self.files) - MAX_VISIBLE)
                 elif key in ('j', 'DOWN'):
-                    if self.cursor < len(self.files) - 1:
-                        self.cursor += 1
-                        if self.cursor >= self.offset + MAX_VISIBLE:
-                            self.offset = self.cursor - MAX_VISIBLE + 1
+                    self.cursor = (self.cursor + 1) % len(self.files)
+                    if self.cursor == 0:
+                        self.offset = 0
+                    elif self.cursor >= self.offset + MAX_VISIBLE:
+                        self.offset = self.cursor - MAX_VISIBLE + 1
                 elif key == 'ENTER':
                     self.selected = self.files[self.cursor]
                     break
