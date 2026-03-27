@@ -18,10 +18,36 @@ MAX_VISIBLE = 15
 TUI_H = 3 + MAX_VISIBLE + 1
 
 
+# ─── Korean IME transparency (두벌식 standard layout) ────────────────────────
+#
+# When macOS Korean IME is active the Cocoa input layer sits above tty.setraw(),
+# so the terminal receives Hangul Compatibility Jamo (U+3130–U+318F) instead of
+# the originating ASCII key.  Map each jamo back to its physical key so that
+# navigation shortcuts work regardless of the current input mode.
+#
+# Layout reference (두벌식):
+#   q=ㅂ w=ㅈ e=ㄷ r=ㄱ t=ㅅ  y=ㅛ u=ㅕ i=ㅑ o=ㅐ p=ㅔ
+#   a=ㅁ s=ㄴ d=ㅇ f=ㄹ g=ㅎ  h=ㅗ j=ㅓ k=ㅏ l=ㅣ
+#   z=ㅋ x=ㅌ c=ㅊ v=ㅍ         b=ㅠ n=ㅜ m=ㅡ
+
+_KO_TO_ASCII: dict = {
+    # consonants
+    'ㅂ': 'q', 'ㅈ': 'w', 'ㄷ': 'e', 'ㄱ': 'r', 'ㅅ': 't',
+    'ㅁ': 'a', 'ㄴ': 's', 'ㅇ': 'd', 'ㄹ': 'f', 'ㅎ': 'g',
+    'ㅋ': 'z', 'ㅌ': 'x', 'ㅊ': 'c', 'ㅍ': 'v',
+    # vowels
+    'ㅛ': 'y', 'ㅕ': 'u', 'ㅑ': 'i', 'ㅐ': 'o', 'ㅔ': 'p',
+    'ㅗ': 'h', 'ㅓ': 'j', 'ㅏ': 'k', 'ㅣ': 'l',
+    'ㅠ': 'b', 'ㅜ': 'n', 'ㅡ': 'm',
+}
+
+
 # ─── Key reader ──────────────────────────────────────────────────────────────
 
 def read_key() -> str:
     ch = sys.stdin.read(1)
+    # Transparently remap Korean jamo to the originating ASCII key
+    ch = _KO_TO_ASCII.get(ch, ch)
     if ch == '\x1b':
         r, _, _ = select.select([sys.stdin], [], [], 0.05)
         if r:
