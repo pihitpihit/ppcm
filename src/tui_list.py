@@ -1,6 +1,7 @@
 """PCM file browser – bottom-pane list TUI."""
 
 import os
+import re
 import sys
 import shutil
 import termios
@@ -42,22 +43,72 @@ _KO_TO_ASCII: dict = {
 }
 
 
+# ─── Low-level I/O helpers ───────────────────────────────────────────────────
+# All reads use os.read(fd) directly to avoid TextIOWrapper buffering
+# conflicts with the CPR escape sequence used for absolute positioning.
+
+def _read_byte(fd: int) -> bytes:
+    return os.read(fd, 1)
+
+
+def _read_char(fd: int) -> str:
+    """Read one Unicode character from a raw fd, handling multi-byte UTF-8."""
+    b = _read_byte(fd)
+    if not b:
+        return ''
+    first = b[0]
+    if first < 0x80:
+        return chr(first)
+    elif first < 0xE0:
+        n_extra = 1
+    elif first < 0xF0:
+        n_extra = 2
+    else:
+        n_extra = 3
+    for _ in range(n_extra):
+        extra = _read_byte(fd)
+        if extra:
+            b += extra
+    return b.decode('utf-8', errors='replace')
+
+
+def _query_cursor_row(fd: int) -> int:
+    """Return the terminal's current cursor row (1-based) via CPR (ESC[6n).
+
+    Returns -1 if the terminal does not respond within the timeout.
+    Uses os.read() so it shares the same buffer as _read_char()."""
+    sys.stdout.write('\033[6n')
+    sys.stdout.flush()
+    buf = b''
+    for _ in range(64):
+        r, _, _ = select.select([fd], [], [], 0.3)
+        if not r:
+            break
+        b = os.read(fd, 1)
+        buf += b
+        if b == b'R':
+            break
+    m = re.search(rb'\x1b\[(\d+);(\d+)R', buf)
+    return int(m.group(1)) if m else -1
+
+
 # ─── Key reader ──────────────────────────────────────────────────────────────
 
-def read_key():
-    """Return (key_name, is_jamo) where is_jamo is True when the raw input
-    was a Korean jamo remapped from the IME."""
-    ch = sys.stdin.read(1)
+def read_key(fd: int):
+    """Return (key_name, is_jamo).
+
+    is_jamo is True when the raw input was a Korean jamo remapped via IME."""
+    ch = _read_char(fd)
     is_jamo = ch in _KO_TO_ASCII
     ch = _KO_TO_ASCII.get(ch, ch)
     if ch == '\x1b':
-        r, _, _ = select.select([sys.stdin], [], [], 0.05)
+        r, _, _ = select.select([fd], [], [], 0.05)
         if r:
-            ch2 = sys.stdin.read(1)
+            ch2 = _read_char(fd)
             if ch2 == '[':
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                r, _, _ = select.select([fd], [], [], 0.05)
                 if r:
-                    ch3 = sys.stdin.read(1)
+                    ch3 = _read_char(fd)
                     key = {'A': 'UP', 'B': 'DOWN',
                            'C': 'RIGHT', 'D': 'LEFT'}.get(ch3, f'ESC[{ch3}')
                     return key, False
@@ -74,6 +125,9 @@ class ListTUI:
 
     Occupies TUI_H lines at the bottom of the current terminal output.
     Previous terminal content is preserved above.
+
+    Cursor positioning uses an absolute row obtained via CPR (ESC[6n) so that
+    macOS IME pre-edit rendering cannot drift the redraw position.
 
     Returns the selected file path from run(), or None if the user quit.
     """
@@ -165,21 +219,36 @@ class ListTUI:
         sys.stdout.write(''.join(buf))
         sys.stdout.flush()
 
+    def _goto_top(self, tui_row: int):
+        """Move cursor to the TUI start row (absolute if known, relative otherwise)."""
+        if tui_row > 0:
+            sys.stdout.write(f'\033[{tui_row};1H')
+        else:
+            sys.stdout.write(cuu(TUI_H))
+
     # ── event loop ───────────────────────────────────────────────────────────
 
     def run(self):
-        # reserve space at the bottom without clearing existing output
+        # Reserve TUI_H lines below current output without clearing it
         sys.stdout.write('\n' * TUI_H + cuu(TUI_H))
         sys.stdout.flush()
         self._draw(self._render())
 
         fd  = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
+        tui_row = -1   # absolute screen row of TUI top (1-based); -1 = unknown
+
         try:
             tty.setraw(fd)
+
+            # Query absolute cursor position right after initial draw.
+            # Cursor is currently at TUI_top + TUI_H; subtract to get TUI_top.
+            bottom = _query_cursor_row(fd)
+            if bottom > 0:
+                tui_row = bottom - TUI_H
+
             while True:
-                key, is_jamo = read_key()
-                # Show/clear the Korean IME hint on the status bar
+                key, is_jamo = read_key(fd)
                 self._ime_warn = is_jamo
 
                 if key in ('q', 'Q', 'ESC', 'CTRL_C'):
@@ -200,17 +269,17 @@ class ListTUI:
                     self.selected = self.files[self.cursor]
                     break
 
-                sys.stdout.write(cuu(TUI_H))
+                self._goto_top(tui_row)
                 self._draw(self._render())
 
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-        # clear TUI area, leave cursor at the top of where TUI was
-        sys.stdout.write(cuu(TUI_H))
+        # Clear TUI area and leave cursor at TUI start
+        self._goto_top(tui_row)
         for _ in range(TUI_H):
             sys.stdout.write('\r' + el() + '\n')
-        sys.stdout.write(cuu(TUI_H))
+        self._goto_top(tui_row)
         sys.stdout.flush()
 
         return self.selected
