@@ -1,6 +1,7 @@
 """PCM file browser – bottom-pane list TUI."""
 
 import fcntl
+import math
 import os
 import re
 import signal
@@ -99,12 +100,13 @@ class ListTUI:
     """
 
     def __init__(self, files: list, base_dir: str, use_color: bool):
-        self.files     = files
-        self.base_dir  = base_dir
-        self.use_color = use_color
-        self.cursor    = 0
-        self.offset    = 0
-        self.selected  = None
+        self.files         = files
+        self.base_dir      = base_dir
+        self.use_color     = use_color
+        self.cursor        = 0
+        self.offset        = 0
+        self.selected      = None
+        self._drawn_width  = 0
 
     # ── rendering ────────────────────────────────────────────────────────────
 
@@ -115,6 +117,7 @@ class ListTUI:
 
     def _render(self) -> list:
         w     = shutil.get_terminal_size().columns
+        self._drawn_width = w
         total = len(self.files)
         lines = []
 
@@ -224,11 +227,18 @@ class ListTUI:
                         os.read(sig_r, 256)
                     except OSError:
                         pass
-                    # When the window shrinks, each TUI line may have wrapped
-                    # once, doubling the occupied rows.  Erase 2*TUI_H lines
-                    # from tui_row to wipe all wrapped remnants before redraw.
+                    # Compute how many terminal rows the old content now
+                    # occupies after resize.  Each old line of width old_w
+                    # wraps to ceil(old_w / new_w) rows at the new width.
+                    old_w = self._drawn_width or shutil.get_terminal_size().columns
+                    new_w = shutil.get_terminal_size().columns
+                    if new_w > 0 and old_w > new_w:
+                        wrap_factor = math.ceil(old_w / new_w)
+                    else:
+                        wrap_factor = 1
+                    clear_lines = TUI_H * wrap_factor
                     self._goto_top(tui_row)
-                    for _ in range(TUI_H * 2):
+                    for _ in range(clear_lines):
                         sys.stdout.write('\r\033[2K\n')
                     self._goto_top(tui_row)
                     self._draw(self._render())
