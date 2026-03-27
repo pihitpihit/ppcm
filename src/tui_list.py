@@ -44,9 +44,11 @@ _KO_TO_ASCII: dict = {
 
 # ─── Key reader ──────────────────────────────────────────────────────────────
 
-def read_key() -> str:
+def read_key():
+    """Return (key_name, is_jamo) where is_jamo is True when the raw input
+    was a Korean jamo remapped from the IME."""
     ch = sys.stdin.read(1)
-    # Transparently remap Korean jamo to the originating ASCII key
+    is_jamo = ch in _KO_TO_ASCII
     ch = _KO_TO_ASCII.get(ch, ch)
     if ch == '\x1b':
         r, _, _ = select.select([sys.stdin], [], [], 0.05)
@@ -56,12 +58,13 @@ def read_key() -> str:
                 r, _, _ = select.select([sys.stdin], [], [], 0.05)
                 if r:
                     ch3 = sys.stdin.read(1)
-                    return {'A': 'UP', 'B': 'DOWN',
-                            'C': 'RIGHT', 'D': 'LEFT'}.get(ch3, f'ESC[{ch3}')
-        return 'ESC'
-    if ch in ('\r', '\n'): return 'ENTER'
-    if ch == '\x03':       return 'CTRL_C'
-    return ch
+                    key = {'A': 'UP', 'B': 'DOWN',
+                           'C': 'RIGHT', 'D': 'LEFT'}.get(ch3, f'ESC[{ch3}')
+                    return key, False
+        return 'ESC', False
+    if ch in ('\r', '\n'): return 'ENTER', False
+    if ch == '\x03':       return 'CTRL_C', False
+    return ch, is_jamo
 
 
 # ─── List TUI ────────────────────────────────────────────────────────────────
@@ -82,6 +85,7 @@ class ListTUI:
         self.cursor    = 0
         self.offset    = 0
         self.selected  = None
+        self._ime_warn = False   # True while Korean IME hint is visible
 
     # ── rendering ────────────────────────────────────────────────────────────
 
@@ -104,7 +108,10 @@ class ListTUI:
 
         # status / key hints
         pos   = f"  {self.cursor + 1}/{total}"
-        hints = "[j/k/↑↓] nav  [↵] select  [q/ESC] quit  "
+        if self._ime_warn:
+            hints = "※ 한글모드: 방향키(↑↓) 사용 권장  [↵] select  [q/ESC] quit  "
+        else:
+            hints = "[↑↓/j/k] nav  [↵] select  [q/ESC] quit  "
         pad   = max(w - len(pos) - len(hints), 1)
         lines.append(self._c((pos + " " * pad + hints)[:w].ljust(w), STATUS))
 
@@ -171,7 +178,9 @@ class ListTUI:
         try:
             tty.setraw(fd)
             while True:
-                key = read_key()
+                key, is_jamo = read_key()
+                # Show/clear the Korean IME hint on the status bar
+                self._ime_warn = is_jamo
 
                 if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                     break
