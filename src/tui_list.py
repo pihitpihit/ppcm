@@ -190,10 +190,6 @@ class ListTUI:
     # ── event loop ───────────────────────────────────────────────────────────
 
     def run(self):
-        # Disable auto-wrap (DECAWM off) so that shrinking the terminal clips
-        # TUI lines instead of wrapping them.  Wrapping would add extra rows and
-        # corrupt the tui_row anchor, causing visible artefacts on resize.
-        sys.stdout.write('\033[?7l')
         # Reserve TUI_H lines below current output without clearing it
         sys.stdout.write('\n' * TUI_H + cuu(TUI_H))
         sys.stdout.flush()
@@ -228,7 +224,12 @@ class ListTUI:
                         os.read(sig_r, 256)
                     except OSError:
                         pass
-                    # Redraw with the new terminal width; tui_row stays valid
+                    # When the window shrinks, each TUI line may have wrapped
+                    # once, doubling the occupied rows.  Erase 2*TUI_H lines
+                    # from tui_row to wipe all wrapped remnants before redraw.
+                    self._goto_top(tui_row)
+                    for _ in range(TUI_H * 2):
+                        sys.stdout.write('\r\033[2K\n')
                     self._goto_top(tui_row)
                     self._draw(self._render())
                     continue
@@ -262,8 +263,6 @@ class ListTUI:
             os.close(sig_r)
             os.close(sig_w)
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
-            sys.stdout.write('\033[?7h')  # re-enable auto-wrap
-            sys.stdout.flush()
 
         # Clear TUI area and leave cursor at TUI start
         self._goto_top(tui_row)
