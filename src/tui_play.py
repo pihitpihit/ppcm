@@ -125,6 +125,24 @@ class PlayTUI:
         self._paused   = False
         self._start_from(self._pause_pos)
 
+    def _seek(self, delta: float):
+        """Seek by *delta* seconds (negative = backward)."""
+        if self._paused:
+            self._pause_pos = max(0.0, min(self._pause_pos + delta, self.duration))
+        elif self._is_done():
+            new_pos = max(0.0, min(self.duration + delta, self.duration))
+            if new_pos < self.duration:
+                self._start_from(new_pos)
+        else:
+            new_pos = max(0.0, min(self._elapsed() + delta, self.duration))
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.terminate()
+                    self._proc.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+            self._start_from(new_pos)
+
     def _restart(self):
         self._stop()
         self._paused       = False
@@ -233,8 +251,8 @@ class PlayTUI:
             lines.append(self._c(state[:w].ljust(w), _PLAY))
 
         # key hints
-        hints = ('  [SPACE] replay  [q/ESC] back  ' if done
-                 else '  [SPACE] pause/resume  [q/ESC] back  ')
+        hints = ('  [SPACE] replay  [h/←] -0.1s  [l/→] +0.1s  [q/ESC] back  ' if done
+                 else '  [SPACE] pause/resume  [h/←] -0.1s  [l/→] +0.1s  [q/ESC] back  ')
         lines.append(self._c(hints[:w].ljust(w), STATUS))
 
         # bottom border
@@ -310,6 +328,10 @@ class PlayTUI:
                             self._resume()
                         else:
                             self._pause()
+                    elif key in ('h', 'LEFT'):
+                        self._seek(-0.1)
+                    elif key in ('l', 'RIGHT'):
+                        self._seek(0.1)
 
                 self._goto_top(tui_row)
                 self._draw(self._render())
