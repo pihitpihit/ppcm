@@ -101,6 +101,14 @@ class PlayTUI:
             self._paused  = False
             self._pause_at = None
 
+    def _restart(self):
+        self._stop()
+        self._paused       = False
+        self._start_time   = None
+        self._pause_at     = None
+        self._paused_total = 0.0
+        self._start()
+
     def _stop(self):
         if self._proc and self._proc.poll() is None:
             try:
@@ -186,7 +194,7 @@ class PlayTUI:
 
         # state indicator
         if done:
-            state = '  [ DONE ]  press q to return'
+            state = '  [ DONE ]'
             lines.append(self._c(state[:w].ljust(w), _DONE))
         elif self._paused:
             state = '  [ PAUSED ]'
@@ -196,7 +204,8 @@ class PlayTUI:
             lines.append(self._c(state[:w].ljust(w), _PLAY))
 
         # key hints
-        hints = '  [SPACE] pause/resume  [q/ESC] back  '
+        hints = ('  [SPACE] replay  [q/ESC] back  ' if done
+                 else '  [SPACE] pause/resume  [q/ESC] back  ')
         lines.append(self._c(hints[:w].ljust(w), STATUS))
 
         # bottom border
@@ -266,7 +275,9 @@ class PlayTUI:
                     if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                         break
                     elif key == ' ':
-                        if self._paused:
+                        if self._is_done():
+                            self._restart()
+                        elif self._paused:
                             self._resume()
                         else:
                             self._pause()
