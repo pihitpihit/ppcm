@@ -134,7 +134,10 @@ class PlayTUI:
         return max(0.0, min(t, self.duration))
 
     def _is_done(self) -> bool:
-        return self._proc is not None and self._proc.poll() is not None
+        return (
+            (self._proc is not None and self._proc.poll() is not None)
+            or self._elapsed() >= self.duration
+        )
 
     # ── rendering ─────────────────────────────────────────────────────────────
 
@@ -147,7 +150,7 @@ class PlayTUI:
         w       = shutil.get_terminal_size().columns
         self._drawn_width = w
         elapsed = self._elapsed()
-        done    = self._is_done() or elapsed >= self.duration
+        done    = self._is_done()
         lines   = []
 
         # top border
