@@ -288,8 +288,8 @@ class PlayTUI:
 
         # ── header border ────────────────────────────────────────────────────
         title = '  PCM Player  '
-        side  = (w - len(title) - 2) // 2
-        extra = w - len(title) - 2 - side * 2
+        side  = (w - len(title)) // 2
+        extra = w - len(title) - side * 2
         lines.append(self._c(
             ('─' * side + title + '─' * (side + extra))[:w].ljust(w), BORDER))
 
