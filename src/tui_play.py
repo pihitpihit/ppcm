@@ -11,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 import termios
-import threading
 import time
 import tty
 import wave
@@ -244,8 +243,8 @@ class PlayTUI:
             self._start()
 
             while True:
-                # 0.1 s timeout drives progress-bar updates
-                readable, _, _ = select.select([fd, sig_r], [], [], 0.1)
+                # ~30 fps timeout drives progress-bar updates
+                readable, _, _ = select.select([fd, sig_r], [], [], 0.033)
 
                 if sig_r in readable:
                     try:
