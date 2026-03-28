@@ -147,7 +147,7 @@ class PlayTUI:
         w       = shutil.get_terminal_size().columns
         self._drawn_width = w
         elapsed = self._elapsed()
-        done    = self._is_done()
+        done    = self._is_done() or elapsed >= self.duration
         lines   = []
 
         # top border
