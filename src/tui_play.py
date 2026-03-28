@@ -167,12 +167,11 @@ class PlayTUI:
             self._tmpwav = None
 
     def _elapsed(self) -> float:
+        if self._paused:
+            return self._pause_pos
         if self._start_time is None:
             return 0.0
-        paused = self._paused_total
-        if self._paused and self._pause_at:
-            paused += time.time() - self._pause_at
-        t = time.time() - self._start_time - paused
+        t = time.time() - self._start_time - self._paused_total
         return max(0.0, min(t, self.duration))
 
     def _is_done(self) -> bool:
