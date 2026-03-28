@@ -146,6 +146,10 @@ class PlayTUI:
 
     def _seek(self, delta: float):
         if self._is_ready():
+            new_pos = max(0.0, min(delta, self.duration))
+            self._paused    = True
+            self._pause_pos = new_pos
+            self._pause_at  = None
             return
         if self._paused:
             self._pause_pos = max(0.0, min(self._pause_pos + delta, self.duration))
@@ -311,7 +315,7 @@ class PlayTUI:
         _TAIL       = '  [q/ESC] back  '
         if ready:
             state_txt, state_clr = ' READY ',   _STATE_READY
-            hints_txt = f'[SPACE] {"play".ljust(_ACT_W)}{_TAIL}'
+            hints_txt = f'{_SEEK_HINTS}[SPACE] {"play".ljust(_ACT_W)}{_TAIL}'
         elif done:
             state_txt, state_clr = ' DONE ',    _STATE_DONE
             hints_txt = f'{_SEEK_HINTS}[SPACE] {"replay".ljust(_ACT_W)}{_TAIL}'
@@ -431,7 +435,7 @@ class PlayTUI:
                     key = read_key(fd)
                     if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                         break
-                    elif key == ' ':
+                    elif key == 'SPACE':
                         if self._is_ready():
                             self._start()
                         elif self._is_done():

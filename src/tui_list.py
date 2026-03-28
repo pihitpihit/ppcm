@@ -1,26 +1,41 @@
 """PCM file browser – bottom-pane list TUI."""
 
 import fcntl
+import io
 import math
 import os
 import re
 import signal
+import subprocess
 import sys
 import shutil
+import tempfile
 import termios
+import time
 import tty
+import wave
 import select
 
 from .ansi import (
     cuu, el, sgr,
     R, SEL, ROW_EVEN, ROW_ODD, BORDER, STATUS, COLHDR,
 )
-from .pcm_utils import pcm_duration, fmt_size
+from .pcm_utils import (
+    pcm_duration, fmt_size,
+    PCM_SAMPLE_RATE, PCM_CHANNELS, PCM_BYTES_PER_SAMPLE,
+)
 
 MAX_VISIBLE = 15
 # top-border + status + col-header + MAX_VISIBLE rows + bottom-border
 TUI_H = 3 + MAX_VISIBLE + 1
 
+# ─── Instant-play colour constants ───────────────────────────────────────────
+# Foreground on filled (progress) portion  /  foreground on unfilled portion
+_IP_PLAY_FILL   = sgr(38, 5, 0,   48, 5, 114)   # black on green
+_IP_PLAY_EMPTY  = sgr(38, 5, 114, 48, 5, 0)     # green on black  (default bg)
+_IP_PAUSE_FILL  = sgr(38, 5, 0,   48, 5, 214)   # black on orange
+_IP_PAUSE_EMPTY = sgr(38, 5, 214, 48, 5, 0)     # orange on black
+_IP_DONE_FULL   = sgr(1,  38, 5, 255, 48, 5, 26)  # bold white on steel-blue (= SEL)
 
 # ─── Low-level I/O helpers ───────────────────────────────────────────────────
 # All reads use os.read(fd) directly to avoid TextIOWrapper buffering
@@ -82,6 +97,7 @@ def read_key(fd: int) -> str:
         return 'ESC'
     if ch in ('\r', '\n'): return 'ENTER'
     if ch == '\x03':       return 'CTRL_C'
+    if ch == ' ':          return 'SPACE'
     return ch
 
 
@@ -113,12 +129,150 @@ class ListTUI:
         self.selected      = None
         self._drawn_width  = 0
 
+        # ── instant-play state ────────────────────────────────────────────
+        # state: None | 'playing' | 'paused' | 'done'
+        self._ip_state      = None
+        self._ip_idx        = -1       # file index being played/done
+        self._ip_proc       = None     # afplay subprocess
+        self._ip_tmpwav     = None     # NamedTemporaryFile handle
+        self._ip_duration   = 0.0
+        self._ip_start_time = 0.0     # wall-clock anchor
+        self._ip_paused_total = 0.0   # cumulative paused seconds
+        self._ip_pause_at   = 0.0
+        self._ip_pause_pos  = 0.0
+
+    # ── instant-play engine ───────────────────────────────────────────────────
+
+    def _ip_start_from(self, pos: float):
+        """Start afplay from *pos* seconds into the current cursor file."""
+        fp = self.files[self._ip_idx]
+        bps = PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_BYTES_PER_SAMPLE
+        byte_offset = int(pos * bps)
+        byte_offset -= byte_offset % PCM_BYTES_PER_SAMPLE
+
+        with open(fp, 'rb') as f:
+            f.seek(byte_offset)
+            pcm_data = f.read()
+
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(PCM_CHANNELS)
+            wf.setsampwidth(PCM_BYTES_PER_SAMPLE)
+            wf.setframerate(PCM_SAMPLE_RATE)
+            wf.writeframes(pcm_data)
+
+        if self._ip_tmpwav is not None:
+            try:
+                os.unlink(self._ip_tmpwav)
+            except OSError:
+                pass
+
+        fd_tmp, tmp_path = tempfile.mkstemp(suffix='.wav')
+        os.write(fd_tmp, buf.getvalue())
+        os.close(fd_tmp)
+        self._ip_tmpwav = tmp_path
+
+        self._ip_proc = subprocess.Popen(
+            ['afplay', tmp_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self._ip_start_time   = time.time() - pos - self._ip_paused_total
+        self._ip_state        = 'playing'
+
+    def _ip_start(self):
+        """Begin instant play from the beginning of the cursor file."""
+        fp = self.files[self.cursor]
+        self._ip_idx          = self.cursor
+        self._ip_duration     = pcm_duration(fp)
+        self._ip_paused_total = 0.0
+        self._ip_pause_at     = 0.0
+        self._ip_pause_pos    = 0.0
+        self._ip_start_from(0.0)
+
+    def _ip_pause(self):
+        if self._ip_state != 'playing':
+            return
+        self._ip_pause_pos = self._ip_elapsed()
+        self._ip_pause_at  = time.time()
+        if self._ip_proc and self._ip_proc.poll() is None:
+            self._ip_proc.terminate()
+        self._ip_state = 'paused'
+
+    def _ip_resume(self):
+        if self._ip_state != 'paused':
+            return
+        self._ip_paused_total += time.time() - self._ip_pause_at
+        self._ip_start_from(self._ip_pause_pos)
+
+    def _ip_stop(self):
+        """Kill playback without entering done state (cleanup)."""
+        if self._ip_proc and self._ip_proc.poll() is None:
+            self._ip_proc.terminate()
+        self._ip_proc  = None
+        self._ip_state = None
+        if self._ip_tmpwav is not None:
+            try:
+                os.unlink(self._ip_tmpwav)
+            except OSError:
+                pass
+            self._ip_tmpwav = None
+
+    def _ip_stop_to_done(self):
+        """Stop playback and enter done state for the current ip_idx."""
+        if self._ip_proc and self._ip_proc.poll() is None:
+            self._ip_proc.terminate()
+        self._ip_proc  = None
+        self._ip_state = 'done'
+        if self._ip_tmpwav is not None:
+            try:
+                os.unlink(self._ip_tmpwav)
+            except OSError:
+                pass
+            self._ip_tmpwav = None
+
+    def _ip_elapsed(self) -> float:
+        if self._ip_state == 'paused':
+            return self._ip_pause_pos
+        elapsed = time.time() - self._ip_start_time - self._ip_paused_total
+        return min(elapsed, self._ip_duration)
+
+    def _ip_proc_done(self) -> bool:
+        """True when the afplay process has finished naturally."""
+        if self._ip_state != 'playing':
+            return False
+        elapsed = time.time() - self._ip_start_time - self._ip_paused_total
+        if elapsed >= self._ip_duration:
+            return True
+        return self._ip_proc is not None and self._ip_proc.poll() is not None
+
     # ── rendering ────────────────────────────────────────────────────────────
 
     def _c(self, text: str, *codes) -> str:
         if not self.use_color:
             return text
         return ''.join(codes) + text + R
+
+    def _render_ip_row(self, row_text: str, w: int) -> str:
+        """Render a row with instant-play progress fill overlay."""
+        if self._ip_state == 'done':
+            return _IP_DONE_FULL + row_text[:w].ljust(w) + R
+
+        elapsed  = self._ip_elapsed()
+        frac     = min(elapsed / self._ip_duration, 1.0) if self._ip_duration > 0 else 0.0
+        fill_w   = int(frac * w)
+        text     = row_text[:w].ljust(w)
+
+        if self._ip_state == 'playing':
+            fill_col  = _IP_PLAY_FILL
+            empty_col = _IP_PLAY_EMPTY
+        else:  # paused
+            fill_col  = _IP_PAUSE_FILL
+            empty_col = _IP_PAUSE_EMPTY
+
+        filled  = fill_col  + text[:fill_w] + R
+        unfilled = empty_col + text[fill_w:] + R
+        return filled + unfilled
 
     def _render(self) -> list:
         w     = shutil.get_terminal_size().columns
@@ -136,7 +290,12 @@ class ListTUI:
         # status / key hints
         total_w = len(str(total))
         pos   = f"  {self.cursor + 1:>{total_w}}/{total}"
-        hints = "[↑↓/j/k] nav  [↵] select  [q/ESC] quit  "
+        if self._ip_state == 'playing':
+            hints = "[↑↓/j/k] nav  [SPACE] pause  [↵] open  [q/ESC] quit  "
+        elif self._ip_state == 'paused':
+            hints = "[↑↓/j/k] nav  [SPACE] resume [↵] open  [q/ESC] quit  "
+        else:
+            hints = "[↑↓/j/k] nav  [SPACE] play   [↵] open  [q/ESC] quit  "
         pad   = max(w - len(pos) - len(hints), 1)
         lines.append(self._c((pos + " " * pad + hints)[:w].ljust(w), STATUS))
 
@@ -151,6 +310,7 @@ class ListTUI:
         for i, fp in enumerate(visible):
             idx    = self.offset + i
             is_cur = (idx == self.cursor)
+            is_ip  = (idx == self._ip_idx) and (self._ip_state is not None)
 
             try:
                 sz      = os.path.getsize(fp)
@@ -167,7 +327,9 @@ class ListTUI:
             row = f"  {idx + 1:>{num_w}}  {rel:<{path_w}}{sz_str:>8}{dur_str:>12}"
             row = row[:w].ljust(w)
 
-            if is_cur:
+            if is_ip and self.use_color:
+                lines.append(self._render_ip_row(row, w))
+            elif is_cur:
                 lines.append(self._c(row, SEL))
             elif i % 2 == 0:
                 lines.append(self._c(row, ROW_EVEN))
@@ -224,8 +386,15 @@ class ListTUI:
                 tui_row = bottom - TUI_H
 
             while True:
-                # Block until key input OR terminal resize signal
-                readable, _, _ = select.select([fd, sig_r], [], [])
+                # Use short timeout when playing so progress updates smoothly
+                timeout = 0.02 if self._ip_state == 'playing' else None
+                readable, _, _ = select.select([fd, sig_r], [], [], timeout)
+
+                # ── natural end detection ─────────────────────────────────
+                if self._ip_proc_done():
+                    self._ip_stop_to_done()
+                    self._goto_top(tui_row)
+                    self._draw(self._render())
 
                 if sig_r in readable:
                     # Drain the pipe (may hold multiple signal bytes)
@@ -250,23 +419,47 @@ class ListTUI:
                     self._draw(self._render())
                     continue
 
+                if fd not in readable:
+                    # timeout fired (playing progress tick)
+                    self._goto_top(tui_row)
+                    self._draw(self._render())
+                    continue
+
                 key = read_key(fd)
 
                 if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                     break
+
+                elif key == 'SPACE':
+                    if self._ip_state is None or self._ip_state == 'done':
+                        # start fresh on current cursor
+                        self._ip_stop()
+                        self._ip_start()
+                    elif self._ip_state == 'playing':
+                        self._ip_pause()
+                    elif self._ip_state == 'paused':
+                        self._ip_resume()
+
                 elif key in ('k', 'UP'):
+                    if self._ip_state is not None:
+                        self._ip_stop()
                     self.cursor = (self.cursor - 1) % len(self.files)
                     if self.cursor < self.offset:
                         self.offset = self.cursor
                     elif self.cursor == len(self.files) - 1:
                         self.offset = max(0, len(self.files) - MAX_VISIBLE)
+
                 elif key in ('j', 'DOWN'):
+                    if self._ip_state is not None:
+                        self._ip_stop()
                     self.cursor = (self.cursor + 1) % len(self.files)
                     if self.cursor == 0:
                         self.offset = 0
                     elif self.cursor >= self.offset + MAX_VISIBLE:
                         self.offset = self.cursor - MAX_VISIBLE + 1
+
                 elif key == 'ENTER':
+                    self._ip_stop()
                     self.selected = self.files[self.cursor]
                     break
 
@@ -274,6 +467,7 @@ class ListTUI:
                 self._draw(self._render())
 
         finally:
+            self._ip_stop()
             signal.set_wakeup_fd(old_wakeup)
             signal.signal(signal.SIGWINCH, old_sigwinch)
             os.close(sig_r)
