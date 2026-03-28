@@ -38,18 +38,6 @@ _BAR_ON = sgr(38, 5, 74)        # filled bar colour
 _BAR_OF = sgr(38, 5, 238)       # empty bar colour
 
 
-def _make_wav(pcm_path: str) -> bytes:
-    """Wrap raw PCM in a WAV container and return the bytes."""
-    with open(pcm_path, 'rb') as f:
-        pcm_data = f.read()
-    buf = io.BytesIO()
-    with wave.open(buf, 'wb') as w:
-        w.setnchannels(PCM_CHANNELS)
-        w.setsampwidth(PCM_BYTES_PER_SAMPLE)
-        w.setframerate(PCM_SAMPLE_RATE)
-        w.writeframes(pcm_data)
-    return buf.getvalue()
-
 
 class PlayTUI:
     """Bottom-pane PCM player TUI.
@@ -67,6 +55,7 @@ class PlayTUI:
         self._proc         = None
         self._tmpwav       = None   # path of temp WAV file
         self._paused       = False
+        self._pause_pos    = 0.0    # elapsed seconds when pause was triggered
         self._start_time   = None
         self._pause_at     = None   # time.time() when last pause began
         self._paused_total = 0.0    # total seconds spent paused
@@ -75,9 +64,34 @@ class PlayTUI:
     # ── playback ─────────────────────────────────────────────────────────────
 
     def _start(self):
-        wav = _make_wav(self.path)
+        self._start_from(0.0)
+
+    def _start_from(self, pos: float):
+        """Start afplay from *pos* seconds into the file.
+
+        Adjusts _start_time so that _elapsed() returns *pos* immediately,
+        ensuring the progress bar continues from the correct position.
+        """
+        with open(self.path, 'rb') as f:
+            pcm_data = f.read()
+        bps    = PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_BYTES_PER_SAMPLE
+        offset = int(pos * bps)
+        offset = (offset // PCM_BYTES_PER_SAMPLE) * PCM_BYTES_PER_SAMPLE
+
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as w:
+            w.setnchannels(PCM_CHANNELS)
+            w.setsampwidth(PCM_BYTES_PER_SAMPLE)
+            w.setframerate(PCM_SAMPLE_RATE)
+            w.writeframes(pcm_data[offset:])
+
+        if self._tmpwav:
+            try:
+                os.unlink(self._tmpwav)
+            except OSError:
+                pass
         tmp = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
-        tmp.write(wav)
+        tmp.write(buf.getvalue())
         tmp.close()
         self._tmpwav = tmp.name
         self._proc = subprocess.Popen(
@@ -85,25 +99,36 @@ class PlayTUI:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        self._start_time = time.time()
+        # elapsed() = time.time() - _start_time - _paused_total  →  pos
+        self._start_time = time.time() - pos - self._paused_total
 
     def _pause(self):
-        if self._proc and not self._paused and self._proc.poll() is None:
-            os.kill(self._proc.pid, signal.SIGSTOP)
-            self._paused  = True
-            self._pause_at = time.time()
+        if self._paused or self._is_done():
+            return
+        self._pause_pos = self._elapsed()
+        # Terminate immediately to flush the OS audio buffer
+        if self._proc and self._proc.poll() is None:
+            try:
+                self._proc.terminate()
+                self._proc.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        self._paused   = True
+        self._pause_at = time.time()
 
     def _resume(self):
-        if self._proc and self._paused:
-            os.kill(self._proc.pid, signal.SIGCONT)
-            if self._pause_at is not None:
-                self._paused_total += time.time() - self._pause_at
-            self._paused  = False
-            self._pause_at = None
+        if not self._paused:
+            return
+        if self._pause_at is not None:
+            self._paused_total += time.time() - self._pause_at
+        self._pause_at = None
+        self._paused   = False
+        self._start_from(self._pause_pos)
 
     def _restart(self):
         self._stop()
         self._paused       = False
+        self._pause_pos    = 0.0
         self._start_time   = None
         self._pause_at     = None
         self._paused_total = 0.0
@@ -112,8 +137,6 @@ class PlayTUI:
     def _stop(self):
         if self._proc and self._proc.poll() is None:
             try:
-                if self._paused:
-                    os.kill(self._proc.pid, signal.SIGCONT)
                 self._proc.terminate()
                 self._proc.wait(timeout=2)
             except (OSError, subprocess.TimeoutExpired):
@@ -123,6 +146,7 @@ class PlayTUI:
                 os.unlink(self._tmpwav)
             except OSError:
                 pass
+            self._tmpwav = None
 
     def _elapsed(self) -> float:
         if self._start_time is None:
