@@ -26,36 +26,35 @@ from .pcm_utils import (
 )
 from .tui_list import _query_cursor_row, read_key
 
-TUI_H      = 15   # 1 border + 1 name + 1 info + 8 waveform + 1 bar + 1 state + 1 hints + 1 border
-_WAVE_H    = 8    # terminal lines occupied by the waveform
+_WAVE_H = 8   # terminal lines for waveform
 
 # Sub-character block elements: index = eighths filled (0–8)
 _BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█']
 
 # Braille dot-bit table: _DOT_BITS[dot_row][dot_col]
-# Each Braille char is 2 dot-cols × 4 dot-rows.
 _DOT_BITS = [
-    [0x01, 0x08],   # dot-row 0  (top)
-    [0x02, 0x10],   # dot-row 1
-    [0x04, 0x20],   # dot-row 2
-    [0x40, 0x80],   # dot-row 3  (bottom)
+    [0x01, 0x08],
+    [0x02, 0x10],
+    [0x04, 0x20],
+    [0x40, 0x80],
 ]
 
-# Additional palette entries for play screen
-_PLAY     = sgr(38, 5, 114)     # green     – playing indicator
-_PAUSE    = sgr(38, 5, 222)     # gold      – paused indicator
-_DONE     = sgr(38, 5, 74)      # sky-blue  – done indicator
-_BAR_ON   = sgr(38, 5, 74)      # sky-blue  – filled bar / waveform
-_BAR_OF   = sgr(38, 5, 238)     # dark gray – empty bar
-_PLAYHEAD = sgr(1, 38, 5, 255)  # bold white – playhead column
-
+# Palette
+_BAR_ON       = sgr(38, 5, 74)               # sky-blue  – filled bar / waveform
+_BAR_OF       = sgr(38, 5, 238)              # dark gray – empty bar
+_PLAYHEAD     = sgr(1, 38, 5, 255)           # bold white – playhead column
+_WAVE_BORDER  = sgr(38, 5, 68)              # medium blue – inner border
+_STATE_READY  = sgr(38, 5, 252, 48, 5, 237) # light on dark-gray
+_STATE_PLAY   = sgr(38, 5, 0,   48, 5, 114) # black on green
+_STATE_PAUSE  = sgr(38, 5, 0,   48, 5, 214) # black on orange
+_STATE_DONE   = sgr(38, 5, 0,   48, 5, 74)  # black on sky-blue
 
 
 class PlayTUI:
     """Bottom-pane PCM player TUI.
 
-    Plays a single PCM file via afplay (macOS).
-    Keys: SPACE – pause/resume · q/ESC – back to list.
+    Starts in READY state (no auto-play). SPACE begins playback.
+    Keys: SPACE play/pause/resume/replay · h/← -0.1s · l/→ +0.1s · q/ESC back.
     """
 
     def __init__(self, path: str, use_color: bool):
@@ -64,15 +63,29 @@ class PlayTUI:
         self.duration      = pcm_duration(path)
         self.size          = os.path.getsize(path)
 
-        self._proc         = None
-        self._tmpwav       = None   # path of temp WAV file
-        self._paused       = False
-        self._pause_pos    = 0.0    # elapsed seconds when pause was triggered
-        self._start_time   = None
-        self._pause_at     = None   # time.time() when last pause began
-        self._paused_total = 0.0    # total seconds spent paused
+        self._proc           = None
+        self._tmpwav         = None
+        self._paused         = False
+        self._pause_pos      = 0.0
+        self._start_time     = None
+        self._pause_at       = None
+        self._paused_total   = 0.0
         self._drawn_width    = 0
-        self._waveform_cache = (0, [])   # (n_dot_cols, amplitudes)
+        self._tui_h          = 16      # updated by _render(); 16 = max possible
+        self._waveform_cache = (0, [])
+
+    # ── state queries ─────────────────────────────────────────────────────────
+
+    def _is_ready(self) -> bool:
+        return self._proc is None and self._start_time is None and not self._paused
+
+    def _is_done(self) -> bool:
+        if self._paused:
+            return False
+        return (
+            (self._proc is not None and self._proc.poll() is not None)
+            or self._elapsed() >= self.duration
+        )
 
     # ── playback ─────────────────────────────────────────────────────────────
 
@@ -80,11 +93,6 @@ class PlayTUI:
         self._start_from(0.0)
 
     def _start_from(self, pos: float):
-        """Start afplay from *pos* seconds into the file.
-
-        Adjusts _start_time so that _elapsed() returns *pos* immediately,
-        ensuring the progress bar continues from the correct position.
-        """
         with open(self.path, 'rb') as f:
             pcm_data = f.read()
         bps    = PCM_SAMPLE_RATE * PCM_CHANNELS * PCM_BYTES_PER_SAMPLE
@@ -112,14 +120,12 @@ class PlayTUI:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        # elapsed() = time.time() - _start_time - _paused_total  →  pos
         self._start_time = time.time() - pos - self._paused_total
 
     def _pause(self):
-        if self._paused or self._is_done():
+        if self._paused or self._is_done() or self._is_ready():
             return
         self._pause_pos = self._elapsed()
-        # Terminate immediately to flush the OS audio buffer
         if self._proc and self._proc.poll() is None:
             try:
                 self._proc.terminate()
@@ -139,13 +145,13 @@ class PlayTUI:
         self._start_from(self._pause_pos)
 
     def _seek(self, delta: float):
-        """Seek by *delta* seconds (negative = backward)."""
+        if self._is_ready():
+            return
         if self._paused:
             self._pause_pos = max(0.0, min(self._pause_pos + delta, self.duration))
         elif self._is_done():
             new_pos = max(0.0, min(self.duration + delta, self.duration))
             if new_pos < self.duration:
-                # Enter paused state at new position; SPACE resumes from here
                 self._paused    = True
                 self._pause_pos = new_pos
                 self._pause_at  = None
@@ -190,18 +196,9 @@ class PlayTUI:
         t = time.time() - self._start_time - self._paused_total
         return max(0.0, min(t, self.duration))
 
-    def _is_done(self) -> bool:
-        if self._paused:
-            return False
-        return (
-            (self._proc is not None and self._proc.poll() is not None)
-            or self._elapsed() >= self.duration
-        )
-
     # ── waveform ──────────────────────────────────────────────────────────────
 
     def _compute_waveform(self, n_dot_cols: int) -> list:
-        """Return peak amplitude (0.0–1.0) for each of *n_dot_cols* columns."""
         with open(self.path, 'rb') as f:
             raw = f.read()
         n_samples = len(raw) // PCM_BYTES_PER_SAMPLE
@@ -222,20 +219,16 @@ class PlayTUI:
         return self._waveform_cache[1]
 
     def _render_waveform(self, bar_w: int, elapsed: float) -> list:
-        """Return *_WAVE_H* terminal lines of Braille waveform with playhead."""
         n_dot_cols = bar_w * 2
-        n_dot_rows = _WAVE_H * 4          # 32 dot-rows total
+        n_dot_rows = _WAVE_H * 4
         amplitudes = self._get_waveform(n_dot_cols)
 
-        # Build boolean dot grid: row 0 = top (high amp), row 31 = baseline
-        # Fill from baseline upward for each column's amplitude.
         grid = [[False] * n_dot_cols for _ in range(n_dot_rows)]
         for col, amp in enumerate(amplitudes):
             h = min(int(amp * n_dot_rows), n_dot_rows)
             for row in range(n_dot_rows - h, n_dot_rows):
                 grid[row][col] = True
 
-        # Playhead: Braille char column corresponding to current position
         if self.duration > 0:
             ph = min(int(elapsed / self.duration * n_dot_cols) // 2, bar_w - 1)
         else:
@@ -252,10 +245,7 @@ class PlayTUI:
                             bits |= _DOT_BITS[dr][dc]
                 ch = chr(0x2800 + bits)
                 if self.use_color:
-                    if cc == ph:
-                        chars.append(_PLAYHEAD + ch + R)
-                    else:
-                        chars.append(_BAR_ON + ch + R)
+                    chars.append((_PLAYHEAD if cc == ph else _BAR_ON) + ch + R)
                 else:
                     chars.append(ch)
             lines.append(''.join(chars))
@@ -268,76 +258,108 @@ class PlayTUI:
             return text
         return ''.join(codes) + text + R
 
+    def _box_line(self, content: str, content_vis_w: int, inner_w: int) -> str:
+        """Border-wrapped line.  *content* may contain ANSI codes;
+        *content_vis_w* is its visible character width."""
+        pad = max(0, inner_w - content_vis_w)
+        if self.use_color:
+            return (_WAVE_BORDER + '  │' + R
+                    + content + ' ' * pad
+                    + _WAVE_BORDER + '│' + R)
+        return '  │' + content + ' ' * pad + '│'
+
     def _render(self) -> list:
         w       = shutil.get_terminal_size().columns
         self._drawn_width = w
         elapsed = self._elapsed()
         done    = self._is_done()
+        ready   = self._is_ready()
         lines   = []
 
-        # top border
+        # ── dimensions ──────────────────────────────────────────────────────
+        dur_str     = f'{self.duration:.3f}'
+        dur_str_w   = len(dur_str)
+        # visible width of the time part inside the border:
+        #   '  ' + elapsed.rjust(dw) + ' / ' + dur_str + 's'
+        time_part_w = 2 + dur_str_w + 3 + dur_str_w + 1   # = 2*dw + 6
+        # inner border width: w - 4  (for '  │' + content + '│')
+        bar_w   = max(w - 4 - time_part_w, 4)
+        inner_w = bar_w + time_part_w                      # = w - 4
+
+        # ── header border ────────────────────────────────────────────────────
         title = '  PCM Player  '
         side  = (w - len(title) - 2) // 2
         extra = w - len(title) - 2 - side * 2
-        top   = ('─' * side + title + '─' * (side + extra))[:w]
-        lines.append(self._c(top.ljust(w), BORDER))
+        lines.append(self._c(
+            ('─' * side + title + '─' * (side + extra))[:w].ljust(w), BORDER))
 
-        # filename
-        name = os.path.basename(self.path)
-        if len(name) > w - 4:
-            name = '…' + name[-(w - 5):]
-        lines.append(self._c(f'  {name}'.ljust(w), COLHDR))
+        # ── file info (1 or 2 lines) ─────────────────────────────────────────
+        name       = os.path.basename(self.path)
+        right_part = f'{self.duration:.3f}s · {fmt_size(self.size)}'
+        if 2 + len(name) + 1 + len(right_part) <= w:
+            gap = w - 2 - len(name) - len(right_part)
+            lines.append(self._c(f'  {name}' + ' ' * gap + right_part, COLHDR))
+        else:
+            lines.append(self._c(f'  {name[:w-2]}'.ljust(w), COLHDR))
+            lines.append(self._c(right_part[:w].rjust(w), STATUS))
 
-        # duration + size
-        info = f'  {self.duration:.3f}s · {fmt_size(self.size)}'
-        lines.append(self._c(info[:w].ljust(w), STATUS))
+        # ── state + hints (1 or 2 lines) ─────────────────────────────────────
+        if ready:
+            state_txt, state_clr = ' READY ',   _STATE_READY
+            hints_txt = '[SPACE] play  [q/ESC] back  '
+        elif done:
+            state_txt, state_clr = ' DONE ',    _STATE_DONE
+            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] replay  [q/ESC] back  '
+        elif self._paused:
+            state_txt, state_clr = ' PAUSED ',  _STATE_PAUSE
+            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] resume  [q/ESC] back  '
+        else:
+            state_txt, state_clr = ' PLAYING ', _STATE_PLAY
+            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] pause  [q/ESC] back  '
 
-        # waveform (8 lines) – aligned with bar interior (3-char indent)
-        bar_w   = max(w - 20, 4)
-        pad_r   = max(0, w - 3 - bar_w)
+        s_col = self._c(state_txt, state_clr)
+        h_col = self._c(hints_txt, STATUS)
+
+        if len(state_txt) + len(hints_txt) <= w:
+            gap = w - len(state_txt) - len(hints_txt)
+            lines.append(s_col + ' ' * gap + h_col if self.use_color
+                         else state_txt + ' ' * gap + hints_txt)
+        else:
+            lines.append(s_col + ' ' * (w - len(state_txt)) if self.use_color
+                         else state_txt.ljust(w))
+            lines.append(' ' * (w - len(hints_txt)) + h_col if self.use_color
+                         else hints_txt.rjust(w))
+
+        # ── waveform + progress (bordered section) ────────────────────────────
+        dash = '─' * inner_w
+        lines.append(self._c(f'  ┌{dash}┐', _WAVE_BORDER))
+
         for wf_line in self._render_waveform(bar_w, elapsed):
-            lines.append('   ' + wf_line + ' ' * pad_r)
+            lines.append(self._box_line(wf_line, bar_w, inner_w))
 
-        # progress bar – sub-character precision via 1/8-block elements
+        # progress bar (no brackets)
         ratio   = (elapsed / self.duration) if self.duration > 0 else 0.0
         eighths = int(ratio * bar_w * 8)
         full    = eighths // 8
         partial = eighths % 8
         empty   = bar_w - full - (1 if partial else 0)
 
-        time_str = f'{elapsed:.1f} / {self.duration:.1f}s'
+        elapsed_str = f'{elapsed:.3f}'.rjust(dur_str_w)
+        time_str    = f'  {elapsed_str} / {dur_str}s'
+
         if self.use_color:
-            bar = (
-                _BAR_ON + '█' * full
-                + (_BLOCKS[partial] if partial else '')
-                + R
-                + _BAR_OF + ' ' * empty + R
-            )
-            prog_line = f'  [{bar}]  {time_str}'
+            bar  = (_BAR_ON + '█' * full
+                    + (_BLOCKS[partial] if partial else '')
+                    + R + _BAR_OF + ' ' * empty + R)
+            prog = bar + time_str
         else:
-            bar = '█' * full + (_BLOCKS[partial] if partial else '') + ' ' * empty
-            prog_line = (f'  [{bar}]  {time_str}')[:w].ljust(w)
-        lines.append(prog_line.ljust(w) if not self.use_color else prog_line)
+            bar  = '█' * full + (_BLOCKS[partial] if partial else '') + ' ' * empty
+            prog = bar + time_str
+        lines.append(self._box_line(prog, inner_w, inner_w))
 
-        # state indicator
-        if done:
-            state = '  [ DONE ]'
-            lines.append(self._c(state[:w].ljust(w), _DONE))
-        elif self._paused:
-            state = '  [ PAUSED ]'
-            lines.append(self._c(state[:w].ljust(w), _PAUSE))
-        else:
-            state = '  [ PLAYING ]'
-            lines.append(self._c(state[:w].ljust(w), _PLAY))
+        lines.append(self._c(f'  └{dash}┘', _WAVE_BORDER))
 
-        # key hints
-        hints = ('  [SPACE] replay  [h/←] -0.1s  [l/→] +0.1s  [q/ESC] back  ' if done
-                 else '  [SPACE] pause/resume  [h/←] -0.1s  [l/→] +0.1s  [q/ESC] back  ')
-        lines.append(self._c(hints[:w].ljust(w), STATUS))
-
-        # bottom border
-        lines.append(self._c(('─' * w)[:w], BORDER))
-
+        self._tui_h = len(lines)
         return lines
 
     def _draw(self, lines: list):
@@ -351,14 +373,16 @@ class PlayTUI:
         if tui_row > 0:
             sys.stdout.write(f'\033[{tui_row};1H')
         else:
-            sys.stdout.write(cuu(TUI_H))
+            sys.stdout.write(cuu(self._tui_h))
 
     # ── event loop ────────────────────────────────────────────────────────────
 
     def run(self):
-        sys.stdout.write('\n' * TUI_H + cuu(TUI_H))
+        # Render first to determine actual height before reserving lines
+        initial_lines = self._render()
+        sys.stdout.write('\n' * self._tui_h + cuu(self._tui_h))
         sys.stdout.flush()
-        self._draw(self._render())
+        self._draw(initial_lines)
 
         fd  = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
@@ -374,12 +398,11 @@ class PlayTUI:
             tty.setraw(fd)
             bottom = _query_cursor_row(fd)
             if bottom > 0:
-                tui_row = bottom - TUI_H
+                tui_row = bottom - self._tui_h
 
-            self._start()
+            # Player starts in READY state – no auto-play
 
             while True:
-                # ~50 fps timeout drives progress-bar updates
                 readable, _, _ = select.select([fd, sig_r], [], [], 0.02)
 
                 if sig_r in readable:
@@ -388,10 +411,11 @@ class PlayTUI:
                     except OSError:
                         pass
                     old_w = self._drawn_width or shutil.get_terminal_size().columns
+                    old_h = self._tui_h
                     new_w = shutil.get_terminal_size().columns
                     wrap_factor = math.ceil(old_w / new_w) if new_w > 0 and old_w > new_w else 1
                     self._goto_top(tui_row)
-                    for _ in range(TUI_H * wrap_factor):
+                    for _ in range(old_h * wrap_factor):
                         sys.stdout.write('\r\033[2K\n')
                     self._goto_top(tui_row)
                     self._draw(self._render())
@@ -402,7 +426,9 @@ class PlayTUI:
                     if key in ('q', 'Q', 'ESC', 'CTRL_C'):
                         break
                     elif key == ' ':
-                        if self._is_done():
+                        if self._is_ready():
+                            self._start()
+                        elif self._is_done():
                             self._restart()
                         elif self._paused:
                             self._resume()
@@ -424,9 +450,9 @@ class PlayTUI:
             os.close(sig_w)
             termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
-        # clear TUI area and leave cursor at TUI start
+        # Clear TUI area
         self._goto_top(tui_row)
-        for _ in range(TUI_H):
+        for _ in range(self._tui_h):
             sys.stdout.write('\r' + el() + '\n')
         self._goto_top(tui_row)
         sys.stdout.flush()
