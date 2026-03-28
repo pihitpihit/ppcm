@@ -306,18 +306,21 @@ class PlayTUI:
         # ── state + hints (1 or 2 lines) ─────────────────────────────────────
         # Reserve width of the longest state label so the area never shifts.
         _STATE_W = len(' PLAYING ')   # 9 — longest of all states
+        _SEEK_HINTS = '[h/←] -0.1s  [l/→] +0.1s  '
+        _ACT_W      = len('resume')   # longest SPACE action word = 6
+        _TAIL       = '  [q/ESC] back  '
         if ready:
             state_txt, state_clr = ' READY ',   _STATE_READY
-            hints_txt = '[SPACE] play  [q/ESC] back  '
+            hints_txt = f'[SPACE] {"play".ljust(_ACT_W)}{_TAIL}'
         elif done:
             state_txt, state_clr = ' DONE ',    _STATE_DONE
-            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] replay  [q/ESC] back  '
+            hints_txt = f'{_SEEK_HINTS}[SPACE] {"replay".ljust(_ACT_W)}{_TAIL}'
         elif self._paused:
             state_txt, state_clr = ' PAUSED ',  _STATE_PAUSE
-            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] resume  [q/ESC] back  '
+            hints_txt = f'{_SEEK_HINTS}[SPACE] {"resume".ljust(_ACT_W)}{_TAIL}'
         else:
             state_txt, state_clr = ' PLAYING ', _STATE_PLAY
-            hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] pause  [q/ESC] back  '
+            hints_txt = f'{_SEEK_HINTS}[SPACE] {"pause".ljust(_ACT_W)}{_TAIL}'
         state_txt = state_txt.ljust(_STATE_W)
 
         s_col = self._c(state_txt, state_clr)
