@@ -304,6 +304,8 @@ class PlayTUI:
             lines.append(self._c(right_part[:w].rjust(w), STATUS))
 
         # ── state + hints (1 or 2 lines) ─────────────────────────────────────
+        # Reserve width of the longest state label so the area never shifts.
+        _STATE_W = len(' PLAYING ')   # 9 — longest of all states
         if ready:
             state_txt, state_clr = ' READY ',   _STATE_READY
             hints_txt = '[SPACE] play  [q/ESC] back  '
@@ -316,6 +318,7 @@ class PlayTUI:
         else:
             state_txt, state_clr = ' PLAYING ', _STATE_PLAY
             hints_txt = '[h/←] -0.1s  [l/→] +0.1s  [SPACE] pause  [q/ESC] back  '
+        state_txt = state_txt.ljust(_STATE_W)
 
         s_col = self._c(state_txt, state_clr)
         h_col = self._c(hints_txt, STATUS)
