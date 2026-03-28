@@ -369,6 +369,9 @@ class PlayTUI:
 
         lines.append(self._c(f'└{dash}┘', _WAVE_BORDER))
 
+        # bottom border (mirrors PCM Browser layout)
+        lines.append(self._c(('─' * w)[:w], BORDER))
+
         self._tui_h = len(lines)
         return lines
 
