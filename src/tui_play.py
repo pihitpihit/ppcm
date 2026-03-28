@@ -7,6 +7,7 @@ import os
 import select
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -25,17 +26,28 @@ from .pcm_utils import (
 )
 from .tui_list import _query_cursor_row, read_key
 
-TUI_H = 8
+TUI_H      = 15   # 1 border + 1 name + 1 info + 8 waveform + 1 bar + 1 state + 1 hints + 1 border
+_WAVE_H    = 8    # terminal lines occupied by the waveform
 
 # Sub-character block elements: index = eighths filled (0–8)
 _BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█']
 
+# Braille dot-bit table: _DOT_BITS[dot_row][dot_col]
+# Each Braille char is 2 dot-cols × 4 dot-rows.
+_DOT_BITS = [
+    [0x01, 0x08],   # dot-row 0  (top)
+    [0x02, 0x10],   # dot-row 1
+    [0x04, 0x20],   # dot-row 2
+    [0x40, 0x80],   # dot-row 3  (bottom)
+]
+
 # Additional palette entries for play screen
-_PLAY   = sgr(38, 5, 114)       # green  – playing indicator
-_PAUSE  = sgr(38, 5, 222)       # gold   – paused indicator
-_DONE   = sgr(38, 5, 74)        # sky-blue – done indicator
-_BAR_ON = sgr(38, 5, 74)        # filled bar colour
-_BAR_OF = sgr(38, 5, 238)       # empty bar colour
+_PLAY     = sgr(38, 5, 114)     # green     – playing indicator
+_PAUSE    = sgr(38, 5, 222)     # gold      – paused indicator
+_DONE     = sgr(38, 5, 74)      # sky-blue  – done indicator
+_BAR_ON   = sgr(38, 5, 74)      # sky-blue  – filled bar / waveform
+_BAR_OF   = sgr(38, 5, 238)     # dark gray – empty bar
+_PLAYHEAD = sgr(1, 38, 5, 255)  # bold white – playhead column
 
 
 
@@ -59,7 +71,8 @@ class PlayTUI:
         self._start_time   = None
         self._pause_at     = None   # time.time() when last pause began
         self._paused_total = 0.0    # total seconds spent paused
-        self._drawn_width  = 0
+        self._drawn_width    = 0
+        self._waveform_cache = (0, [])   # (n_dot_cols, amplitudes)
 
     # ── playback ─────────────────────────────────────────────────────────────
 
@@ -182,6 +195,69 @@ class PlayTUI:
             or self._elapsed() >= self.duration
         )
 
+    # ── waveform ──────────────────────────────────────────────────────────────
+
+    def _compute_waveform(self, n_dot_cols: int) -> list:
+        """Return peak amplitude (0.0–1.0) for each of *n_dot_cols* columns."""
+        with open(self.path, 'rb') as f:
+            raw = f.read()
+        n_samples = len(raw) // PCM_BYTES_PER_SAMPLE
+        if n_samples == 0:
+            return [0.0] * n_dot_cols
+        amplitudes = []
+        for col in range(n_dot_cols):
+            s = col * n_samples // n_dot_cols
+            e = max(s + 1, (col + 1) * n_samples // n_dot_cols)
+            e = min(e, n_samples)
+            chunk = struct.unpack_from(f'<{e - s}h', raw, s * PCM_BYTES_PER_SAMPLE)
+            amplitudes.append(max(abs(v) for v in chunk) / 32767.0)
+        return amplitudes
+
+    def _get_waveform(self, n_dot_cols: int) -> list:
+        if self._waveform_cache[0] != n_dot_cols:
+            self._waveform_cache = (n_dot_cols, self._compute_waveform(n_dot_cols))
+        return self._waveform_cache[1]
+
+    def _render_waveform(self, bar_w: int, elapsed: float) -> list:
+        """Return *_WAVE_H* terminal lines of Braille waveform with playhead."""
+        n_dot_cols = bar_w * 2
+        n_dot_rows = _WAVE_H * 4          # 32 dot-rows total
+        amplitudes = self._get_waveform(n_dot_cols)
+
+        # Build boolean dot grid: row 0 = top (high amp), row 31 = baseline
+        # Fill from baseline upward for each column's amplitude.
+        grid = [[False] * n_dot_cols for _ in range(n_dot_rows)]
+        for col, amp in enumerate(amplitudes):
+            h = min(int(amp * n_dot_rows), n_dot_rows)
+            for row in range(n_dot_rows - h, n_dot_rows):
+                grid[row][col] = True
+
+        # Playhead: Braille char column corresponding to current position
+        if self.duration > 0:
+            ph = min(int(elapsed / self.duration * n_dot_cols) // 2, bar_w - 1)
+        else:
+            ph = -1
+
+        lines = []
+        for line_r in range(_WAVE_H):
+            chars = []
+            for cc in range(bar_w):
+                bits = 0
+                for dr in range(4):
+                    for dc in range(2):
+                        if grid[line_r * 4 + dr][cc * 2 + dc]:
+                            bits |= _DOT_BITS[dr][dc]
+                ch = chr(0x2800 + bits)
+                if self.use_color:
+                    if cc == ph:
+                        chars.append(_PLAYHEAD + ch + R)
+                    else:
+                        chars.append(_BAR_ON + ch + R)
+                else:
+                    chars.append(ch)
+            lines.append(''.join(chars))
+        return lines
+
     # ── rendering ─────────────────────────────────────────────────────────────
 
     def _c(self, text: str, *codes) -> str:
@@ -213,11 +289,13 @@ class PlayTUI:
         info = f'  {self.duration:.3f}s · {fmt_size(self.size)}'
         lines.append(self._c(info[:w].ljust(w), STATUS))
 
-        # blank
-        lines.append(' ' * w)
+        # waveform (8 lines) – aligned with bar interior (3-char indent)
+        bar_w   = max(w - 20, 4)
+        pad_r   = max(0, w - 3 - bar_w)
+        for wf_line in self._render_waveform(bar_w, elapsed):
+            lines.append('   ' + wf_line + ' ' * pad_r)
 
         # progress bar – sub-character precision via 1/8-block elements
-        bar_w   = max(w - 20, 4)
         ratio   = (elapsed / self.duration) if self.duration > 0 else 0.0
         eighths = int(ratio * bar_w * 8)
         full    = eighths // 8
