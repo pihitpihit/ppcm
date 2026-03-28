@@ -89,10 +89,28 @@ scroll, shows relative path / size / duration per row.
 
 Keys: `j` `k` `↑` `↓` — navigate · `↵` — select · `q` `ESC` — quit.
 
-### 2 – PCM play (not yet implemented)
+### 2 – PCM play (`tui_play.PlayTUI`)
 
 Shown after a file is selected from the list, or when a file path is passed
-directly. Spec TBD. Current placeholder: prints the selected path and exits.
+directly. Plays via `afplay` (macOS built-in) with a temporary WAV wrapper
+created from the raw PCM data using the stdlib `wave` module.
+
+Layout (TUI_H = 8):
+```
+──────────────── PCM Player ────────────────
+  filename.pcm
+  2.345s · 103.2 KB
+
+  [████████████████░░░░░░░░░░░░░░]  1.2 / 2.3s
+  [ PLAYING ]
+  [SPACE] pause/resume  [q/ESC] back
+────────────────────────────────────────────
+```
+
+Keys: `SPACE` – pause/resume · `q` `ESC` – return to list.
+
+Pause/resume uses `SIGSTOP`/`SIGCONT` on the `afplay` process.
+Progress is computed from wall-clock time minus total paused duration.
 
 ---
 

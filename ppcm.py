@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from src.ansi      import supports_color
 from src.pcm_utils import scan_pcm
 from src.tui_list  import ListTUI
+from src.tui_play  import PlayTUI
 from src.help_fmt  import ColorHelpFormatter
 
 
@@ -61,12 +62,10 @@ examples:
         selected = tui.run()
 
         if selected:
-            # play screen – placeholder until play spec is defined
-            print(f"selected: {selected}")
+            PlayTUI(selected, use_color=supports_color()).run()
 
     elif os.path.isfile(path):
-        # direct file – play screen placeholder
-        print(f"playing: {path}")
+        PlayTUI(path, use_color=supports_color()).run()
 
     else:
         print(f"ppcm: '{args.path}': no such file or directory", file=sys.stderr)
