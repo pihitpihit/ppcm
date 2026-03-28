@@ -58,11 +58,16 @@ examples:
             print(f"ppcm: no PCM files found under '{args.path}'", file=sys.stderr)
             sys.exit(1)
 
-        tui      = ListTUI(files, base_dir=path, use_color=supports_color())
-        selected = tui.run()
-
-        if selected:
-            PlayTUI(selected, use_color=supports_color()).run()
+        use_color = supports_color()
+        cursor    = 0
+        while True:
+            tui      = ListTUI(files, base_dir=path, use_color=use_color,
+                               initial_cursor=cursor)
+            selected = tui.run()
+            if not selected:
+                break
+            cursor = files.index(selected)
+            PlayTUI(selected, use_color=use_color).run()
 
     elif os.path.isfile(path):
         PlayTUI(path, use_color=supports_color()).run()

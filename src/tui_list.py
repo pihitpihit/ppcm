@@ -99,12 +99,17 @@ class ListTUI:
     Returns the selected file path from run(), or None if the user quit.
     """
 
-    def __init__(self, files: list, base_dir: str, use_color: bool):
+    def __init__(self, files: list, base_dir: str, use_color: bool,
+                 initial_cursor: int = 0):
         self.files         = files
         self.base_dir      = base_dir
         self.use_color     = use_color
-        self.cursor        = 0
-        self.offset        = 0
+        self.cursor        = max(0, min(initial_cursor, len(files) - 1))
+        # Centre the initial cursor in the visible window
+        self.offset        = max(0, min(
+            self.cursor - MAX_VISIBLE // 2,
+            max(0, len(files) - MAX_VISIBLE),
+        ))
         self.selected      = None
         self._drawn_width  = 0
 
