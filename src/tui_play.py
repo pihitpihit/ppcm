@@ -145,7 +145,10 @@ class PlayTUI:
         elif self._is_done():
             new_pos = max(0.0, min(self.duration + delta, self.duration))
             if new_pos < self.duration:
-                self._start_from(new_pos)
+                # Enter paused state at new position; SPACE resumes from here
+                self._paused    = True
+                self._pause_pos = new_pos
+                self._pause_at  = None
         else:
             new_pos = max(0.0, min(self._elapsed() + delta, self.duration))
             if self._proc and self._proc.poll() is None:
