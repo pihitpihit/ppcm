@@ -134,7 +134,8 @@ class ListTUI:
         lines.append(self._c(top.ljust(w), BORDER))
 
         # status / key hints
-        pos   = f"  {self.cursor + 1}/{total}"
+        total_w = len(str(total))
+        pos   = f"  {self.cursor + 1:>{total_w}}/{total}"
         hints = "[↑↓/j/k] nav  [↵] select  [q/ESC] quit  "
         pad   = max(w - len(pos) - len(hints), 1)
         lines.append(self._c((pos + " " * pad + hints)[:w].ljust(w), STATUS))
