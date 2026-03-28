@@ -40,14 +40,15 @@ _DOT_BITS = [
 ]
 
 # Palette
-_BAR_ON       = sgr(38, 5, 74)               # sky-blue  – filled bar / waveform
-_BAR_OF       = sgr(38, 5, 238)              # dark gray – empty bar
-_PLAYHEAD     = sgr(1, 38, 5, 255)           # bold white – playhead column
-_WAVE_BORDER  = sgr(38, 5, 68)              # medium blue – inner border
-_STATE_READY  = sgr(38, 5, 252, 48, 5, 237) # light on dark-gray
-_STATE_PLAY   = sgr(38, 5, 0,   48, 5, 114) # black on green
-_STATE_PAUSE  = sgr(38, 5, 0,   48, 5, 214) # black on orange
-_STATE_DONE   = sgr(38, 5, 0,   48, 5, 74)  # black on sky-blue
+_BAR_ON       = sgr(38, 5, 74)                    # sky-blue fg – filled blocks / waveform
+_BAR_PARTIAL  = sgr(38, 5, 74,  48, 5, 236)       # sky-blue fg on dark bg – partial block
+_BAR_OF       = sgr(48, 5, 236)                   # dark bg – empty progress area
+_PLAYHEAD     = sgr(1, 38, 5, 255)                # bold white – playhead column
+_HINTS_BG     = sgr(38, 5, 245, 48, 5, 237)       # gray fg on very-dark bg – hints line
+_STATE_READY  = sgr(38, 5, 0,   48, 5, 74)         # black on sky-blue (= DONE)
+_STATE_PLAY   = sgr(38, 5, 0,   48, 5, 114)       # black on green
+_STATE_PAUSE  = sgr(38, 5, 0,   48, 5, 214)       # black on orange
+_STATE_DONE   = sgr(38, 5, 0,   48, 5, 74)        # black on sky-blue
 
 
 class PlayTUI:
@@ -283,12 +284,7 @@ class PlayTUI:
         # ── dimensions ──────────────────────────────────────────────────────
         dur_str     = f'{self.duration:.3f}'
         dur_str_w   = len(dur_str)
-        # visible width of the time part inside the border:
-        #   '  ' + elapsed.rjust(dw) + ' / ' + dur_str + 's'
-        time_part_w = 2 + dur_str_w + 3 + dur_str_w + 1   # = 2*dw + 6
-        # inner border width: w - 2  (for '│' + content + '│')
-        bar_w   = max(w - 2 - time_part_w, 4)
-        inner_w = bar_w + time_part_w                      # = w - 2
+        bar_w       = max(w, 4)
 
         # ── header border ────────────────────────────────────────────────────
         title = '  PCM Player  '
@@ -328,46 +324,55 @@ class PlayTUI:
         state_txt = state_txt.ljust(_STATE_W)
 
         s_col = self._c(state_txt, state_clr)
-        h_col = self._c(hints_txt, STATUS)
 
         if len(state_txt) + len(hints_txt) <= w:
             gap = w - len(state_txt) - len(hints_txt)
-            lines.append(s_col + ' ' * gap + h_col if self.use_color
-                         else state_txt + ' ' * gap + hints_txt)
+            if self.use_color:
+                rest = (' ' * gap + hints_txt).ljust(w - len(state_txt))
+                lines.append(s_col + _HINTS_BG + rest + R)
+            else:
+                lines.append(state_txt + ' ' * gap + hints_txt)
         else:
-            lines.append(s_col + ' ' * (w - len(state_txt)) if self.use_color
-                         else state_txt.ljust(w))
-            lines.append(' ' * (w - len(hints_txt)) + h_col if self.use_color
-                         else hints_txt.rjust(w))
+            if self.use_color:
+                lines.append(s_col + _HINTS_BG + ' ' * (w - len(state_txt)) + R)
+                lines.append(_HINTS_BG + hints_txt.rjust(w) + R)
+            else:
+                lines.append(state_txt.ljust(w))
+                lines.append(hints_txt.rjust(w))
 
-        # ── waveform + progress (bordered section) ────────────────────────────
-        dash = '─' * inner_w
-        lines.append(self._c(f'┌{dash}┐', _WAVE_BORDER))
-
+        # ── waveform ─────────────────────────────────────────────────────────
         for wf_line in self._render_waveform(bar_w, elapsed):
-            lines.append(self._box_line(wf_line, bar_w, inner_w))
+            lines.append(wf_line)
 
-        # progress bar (no brackets)
+        # ── progress bar (full width, dark bg for empty area) ────────────────
         ratio   = (elapsed / self.duration) if self.duration > 0 else 0.0
         eighths = int(ratio * bar_w * 8)
         full    = eighths // 8
         partial = eighths % 8
         empty   = bar_w - full - (1 if partial else 0)
 
-        elapsed_str = f'{elapsed:.3f}'.rjust(dur_str_w)
-        time_str    = f'  {elapsed_str} / {dur_str}s'
-
         if self.use_color:
-            bar  = (_BAR_ON + '█' * full
-                    + (_BLOCKS[partial] if partial else '')
-                    + R + _BAR_OF + ' ' * empty + R)
-            prog = bar + time_str
+            if self._paused:
+                bar_fg = sgr(38, 5, 214)                # orange (paused)
+                bar_pt = sgr(38, 5, 214, 48, 5, 236)   # orange on dark bg
+            elif not ready and not done:
+                bar_fg = sgr(38, 5, 114)                # green (playing)
+                bar_pt = sgr(38, 5, 114, 48, 5, 236)   # green on dark bg
+            else:
+                bar_fg = _BAR_ON                        # sky-blue (ready/done)
+                bar_pt = _BAR_PARTIAL
+            bar = (bar_fg + '█' * full
+                   + (bar_pt + _BLOCKS[partial] if partial else '')
+                   + R + _BAR_OF + ' ' * empty + R)
         else:
-            bar  = '█' * full + (_BLOCKS[partial] if partial else '') + ' ' * empty
-            prog = bar + time_str
-        lines.append(self._box_line(prog, inner_w, inner_w))
+            bar = '█' * full + (_BLOCKS[partial] if partial else '') + ' ' * empty
+        lines.append(bar)
 
-        lines.append(self._c(f'└{dash}┘', _WAVE_BORDER))
+        # ── time info line (right-aligned) ───────────────────────────────────
+        elapsed_str = f'{elapsed:.3f}'.rjust(dur_str_w)
+        pct_str     = f'{ratio * 100:.2f}%'
+        time_str    = f'{pct_str}  {elapsed_str} / {dur_str}s'
+        lines.append(self._c(time_str.rjust(w), STATUS))
 
         # bottom border (mirrors PCM Browser layout)
         lines.append(self._c(('─' * w)[:w], BORDER))
