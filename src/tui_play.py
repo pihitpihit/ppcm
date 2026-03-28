@@ -263,10 +263,10 @@ class PlayTUI:
         *content_vis_w* is its visible character width."""
         pad = max(0, inner_w - content_vis_w)
         if self.use_color:
-            return (_WAVE_BORDER + '  │' + R
+            return (_WAVE_BORDER + '│' + R
                     + content + ' ' * pad
                     + _WAVE_BORDER + '│' + R)
-        return '  │' + content + ' ' * pad + '│'
+        return '│' + content + ' ' * pad + '│'
 
     def _render(self) -> list:
         w       = shutil.get_terminal_size().columns
@@ -282,9 +282,9 @@ class PlayTUI:
         # visible width of the time part inside the border:
         #   '  ' + elapsed.rjust(dw) + ' / ' + dur_str + 's'
         time_part_w = 2 + dur_str_w + 3 + dur_str_w + 1   # = 2*dw + 6
-        # inner border width: w - 4  (for '  │' + content + '│')
-        bar_w   = max(w - 4 - time_part_w, 4)
-        inner_w = bar_w + time_part_w                      # = w - 4
+        # inner border width: w - 2  (for '│' + content + '│')
+        bar_w   = max(w - 2 - time_part_w, 4)
+        inner_w = bar_w + time_part_w                      # = w - 2
 
         # ── header border ────────────────────────────────────────────────────
         title = '  PCM Player  '
@@ -335,7 +335,7 @@ class PlayTUI:
 
         # ── waveform + progress (bordered section) ────────────────────────────
         dash = '─' * inner_w
-        lines.append(self._c(f'  ┌{dash}┐', _WAVE_BORDER))
+        lines.append(self._c(f'┌{dash}┐', _WAVE_BORDER))
 
         for wf_line in self._render_waveform(bar_w, elapsed):
             lines.append(self._box_line(wf_line, bar_w, inner_w))
@@ -360,7 +360,7 @@ class PlayTUI:
             prog = bar + time_str
         lines.append(self._box_line(prog, inner_w, inner_w))
 
-        lines.append(self._c(f'  └{dash}┘', _WAVE_BORDER))
+        lines.append(self._c(f'└{dash}┘', _WAVE_BORDER))
 
         self._tui_h = len(lines)
         return lines
