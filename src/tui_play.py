@@ -28,6 +28,9 @@ from .tui_list import _query_cursor_row, read_key
 
 TUI_H = 8
 
+# Sub-character block elements: index = eighths filled (0–8)
+_BLOCKS = [' ', '▏', '▎', '▍', '▌', '▋', '▊', '▉', '█']
+
 # Additional palette entries for play screen
 _PLAY   = sgr(38, 5, 114)       # green  – playing indicator
 _PAUSE  = sgr(38, 5, 222)       # gold   – paused indicator
@@ -160,19 +163,25 @@ class PlayTUI:
         # blank
         lines.append(' ' * w)
 
-        # progress bar
-        bar_w  = max(w - 20, 4)
-        filled = int(bar_w * elapsed / self.duration) if self.duration > 0 else 0
+        # progress bar – sub-character precision via 1/8-block elements
+        bar_w   = max(w - 20, 4)
+        ratio   = (elapsed / self.duration) if self.duration > 0 else 0.0
+        eighths = int(ratio * bar_w * 8)
+        full    = eighths // 8
+        partial = eighths % 8
+        empty   = bar_w - full - (1 if partial else 0)
+
+        time_str = f'{elapsed:.1f} / {self.duration:.1f}s'
         if self.use_color:
             bar = (
-                _BAR_ON + '█' * filled + R
-                + _BAR_OF + '░' * (bar_w - filled) + R
+                _BAR_ON + '█' * full
+                + (_BLOCKS[partial] if partial else '')
+                + R
+                + _BAR_OF + ' ' * empty + R
             )
-            time_str = f'{elapsed:.1f} / {self.duration:.1f}s'
             prog_line = f'  [{bar}]  {time_str}'
         else:
-            bar = '█' * filled + '░' * (bar_w - filled)
-            time_str = f'{elapsed:.1f} / {self.duration:.1f}s'
+            bar = '█' * full + (_BLOCKS[partial] if partial else '') + ' ' * empty
             prog_line = (f'  [{bar}]  {time_str}')[:w].ljust(w)
         lines.append(prog_line.ljust(w) if not self.use_color else prog_line)
 
