@@ -158,6 +158,8 @@ class PlayTUI:
         return max(0.0, min(t, self.duration))
 
     def _is_done(self) -> bool:
+        if self._paused:
+            return False
         return (
             (self._proc is not None and self._proc.poll() is not None)
             or self._elapsed() >= self.duration
