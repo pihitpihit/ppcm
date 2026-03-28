@@ -252,8 +252,8 @@ class PlayTUI:
             self._start()
 
             while True:
-                # ~30 fps timeout drives progress-bar updates
-                readable, _, _ = select.select([fd, sig_r], [], [], 0.033)
+                # ~50 fps timeout drives progress-bar updates
+                readable, _, _ = select.select([fd, sig_r], [], [], 0.02)
 
                 if sig_r in readable:
                     try:
