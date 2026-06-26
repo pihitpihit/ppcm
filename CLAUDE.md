@@ -9,8 +9,12 @@ bottom-pane TUI. It is invoked as:
 ppcm <directory|file.pcm> [options]
 ```
 
-The alias `alias ppcm='python3 ~/pihit_env/tools/anna/ppcm/ppcm.py'` is
-registered in `~/.bashrc`. No third-party packages are required.
+It is packaged as an installable Python distribution (`pyproject.toml`,
+src-layout) exposing a `ppcm` console-script entry point. It is distributed via
+Homebrew tap and installed with `brew install pihitpihit/tap/ppcm`. No
+third-party packages are required (standard library only).
+
+For local development: `pip install -e .` (or `pipx install .`) inside a venv.
 
 ---
 
@@ -19,18 +23,36 @@ registered in `~/.bashrc`. No third-party packages are required.
 ```
 ppcm/
   CLAUDE.md          ← this file
-  ppcm.py            ← CLI entry point (thin: routing only)
-  src/               ← Python package (src/__init__.py present)
+  README.md
+  pyproject.toml     ← build config; [project.scripts] ppcm = "ppcm.cli:main"
+  samples/           ← dev fixtures (*.pcm); excluded from the wheel
+  src/ppcm/          ← the importable package
+    __init__.py      ← __version__ (single source of truth for the version)
+    cli.py           ← CLI entry point (thin: arg parsing + routing only)
     ansi.py          ← ANSI primitives (cuu, el, sgr) and colour palette
     pcm_utils.py     ← PCM metadata: pcm_duration, fmt_size, scan_pcm
     tui_list.py      ← ListTUI – bottom-pane file browser + read_key
+    tui_play.py      ← PlayTUI – player screen
     help_fmt.py      ← ColorHelpFormatter – colourised argparse help (TTY-gated)
 ```
 
-`ppcm.py` imports via `from src.<module> import …`.
-Modules inside `src/` use relative imports (`from .ansi import …`).
+`cli.py` and all modules use package-relative imports (`from .ansi import …`).
 
-New screens or features go in `src/tui_<name>.py` and are imported by `ppcm.py`.
+New screens or features go in `src/ppcm/tui_<name>.py` and are imported by
+`cli.py`.
+
+---
+
+## Versioning & release
+
+The version lives only in `src/ppcm/__init__.py` (`__version__`); `pyproject.toml`
+reads it dynamically via hatchling, and `cli.py` re-exports it for `--version`.
+
+To release:
+1. Bump `__version__` in `src/ppcm/__init__.py`, commit.
+2. `git tag vX.Y.Z && git push --tags`, then `gh release create vX.Y.Z`.
+3. Update `Formula/ppcm.rb` in `pihitpihit/homebrew-tap` with the new `url` and
+   `sha256` (`curl -fsSL <tarball> | shasum -a 256`), or run `brew bump-formula-pr`.
 
 ---
 
@@ -44,7 +66,7 @@ All duration / size calculations assume:
 | Sample rate | 22 050 Hz |
 | Channels | 1 (mono) |
 
-Constants live in `src/pcm_utils.py` (`PCM_SAMPLE_RATE`, `PCM_CHANNELS`,
+Constants live in `src/ppcm/pcm_utils.py` (`PCM_SAMPLE_RATE`, `PCM_CHANNELS`,
 `PCM_BYTES_PER_SAMPLE`).
 
 ---
@@ -67,7 +89,7 @@ hide previous terminal output, which contradicts the wizard-style requirement.
 ### Key input
 
 Raw mode is entered with `tty.setraw()` / `termios.tcgetattr()` (stdlib only).
-`read_key()` in `src/tui_list.py` returns symbolic names: `'UP'`, `'DOWN'`,
+`read_key()` in `src/ppcm/tui_list.py` returns symbolic names: `'UP'`, `'DOWN'`,
 `'ENTER'`, `'ESC'`, `'CTRL_C'`, or the literal character.
 
 ### Colour
@@ -75,7 +97,7 @@ Raw mode is entered with `tty.setraw()` / `termios.tcgetattr()` (stdlib only).
 All colour output must be gated on `supports_color()` from `ansi.py`, which
 checks `sys.stdout.isatty()`. Never emit ANSI codes unconditionally.
 
-The palette is defined in `src/ansi.py`. Add new named constants there rather than
+The palette is defined in `src/ppcm/ansi.py`. Add new named constants there rather than
 inlining `sgr(...)` calls in display logic.
 
 ---
@@ -116,7 +138,7 @@ Progress is computed from wall-clock time minus total paused duration.
 
 ## Adding a new screen
 
-1. Create `src/tui_<name>.py` with a class following the same lifecycle as
+1. Create `src/ppcm/tui_<name>.py` with a class following the same lifecycle as
    `ListTUI` (reserve space → draw loop → cleanup → return result).
-2. Import and invoke it from `ppcm.py` via `from src.tui_<name> import …`.
+2. Import and invoke it from `cli.py` via `from .tui_<name> import …`.
 3. Update this file.
