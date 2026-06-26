@@ -12,15 +12,12 @@ import sys
 import os
 import argparse
 
-VERSION = "0.1.0"
-
-# local package
-sys.path.insert(0, os.path.dirname(__file__))
-from src.ansi      import supports_color
-from src.pcm_utils import scan_pcm
-from src.tui_list  import ListTUI
-from src.tui_play  import PlayTUI
-from src.help_fmt  import ColorHelpFormatter
+from . import __version__ as VERSION
+from .ansi      import supports_color
+from .pcm_utils import scan_pcm
+from .tui_list  import ListTUI
+from .tui_play  import PlayTUI
+from .help_fmt  import ColorHelpFormatter
 
 
 def main():

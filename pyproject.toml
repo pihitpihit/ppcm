@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ppcm"
+dynamic = ["version"]
+description = "PCM audio file browser/player with a wizard-style TUI"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "pihit" }]
+keywords = ["pcm", "audio", "tui", "cli", "player"]
+classifiers = [
+  "Environment :: Console",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3",
+  "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/pihitpihit/ppcm"
+
+[project.scripts]
+ppcm = "ppcm.cli:main"
+
+[tool.hatch.version]
+path = "src/ppcm/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ppcm"]
