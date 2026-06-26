@@ -48,13 +48,25 @@ New screens or features go in `src/ppcm/tui_<name>.py` and are imported by
 The version lives only in `src/ppcm/__init__.py` (`__version__`); `pyproject.toml`
 reads it dynamically via hatchling, and `cli.py` re-exports it for `--version`.
 
-To release:
-1. Bump `__version__` in `src/ppcm/__init__.py`, commit.
-2. `git tag vX.Y.Z && git push --tags`, then `gh release create vX.Y.Z`.
-3. Update `Formula/ppcm.rb` in the `pihitpihit/homebrew-tap` repo (local clone at
-   `~/workspace/pihit/homebrew-tap`, sibling of this repo) with the new `url` and
-   `sha256` (`curl -fsSL <tarball> | shasum -a 256`), commit and push; or run
-   `brew bump-formula-pr`. Verify with `brew update && brew upgrade ppcm`.
+Releasing is automated by `.github/workflows/release.yml`, which fires when a
+GitHub **Release is published**. The developer only does steps 1–2:
+
+1. Bump `__version__` in `src/ppcm/__init__.py`, commit and push.
+2. Create + publish a Release with tag `vX.Y.Z` (matching the bumped version),
+   e.g. `gh release create vX.Y.Z --generate-notes`.
+
+The workflow then automatically:
+- Verifies the release tag matches `__version__` (fails the run on mismatch).
+- Computes the tarball `sha256`.
+- Updates `url`/`sha256`/test version in `Formula/ppcm.rb` in the
+  `pihitpihit/homebrew-tap` repo and pushes directly (auth: the `HOMEBREW_TAP_TOKEN`
+  repo secret — a fine-grained PAT scoped to the tap, Contents: write).
+- Verifies on a macOS runner: `brew install` + `brew test` + version check.
+
+Manual fallback (if the workflow is unavailable): update `Formula/ppcm.rb` in the
+local tap clone at `~/workspace/pihit/homebrew-tap` (sibling of this repo) with the
+new `url` and `sha256` (`curl -fsSL <tarball> | shasum -a 256`), commit and push;
+or run `brew bump-formula-pr`. Verify with `brew update && brew upgrade ppcm`.
 
 Consumed by the `pihit_env` repo's `setup.sh` (`brew install pihitpihit/tap/ppcm`).
 

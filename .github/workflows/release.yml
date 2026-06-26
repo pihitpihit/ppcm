@@ -1,0 +1,92 @@
+name: release
+
+# Fires when a GitHub Release is published (Releases -> Draft/Publish).
+# The release tag (e.g. v0.1.2) drives everything downstream.
+on:
+  release:
+    types: [published]
+
+jobs:
+  bump-formula:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ppcm
+        uses: actions/checkout@v4
+
+      - name: Resolve version from tag and verify it matches the source
+        id: ver
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          SRC_VERSION="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/ppcm/__init__.py)"
+          echo "tag=$TAG version=$VERSION src=$SRC_VERSION"
+          if [ "$VERSION" != "$SRC_VERSION" ]; then
+            echo "::error::Release tag ($VERSION) does not match src/ppcm/__init__.py __version__ ($SRC_VERSION)"
+            exit 1
+          fi
+          echo "tag=$TAG"       >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Compute sha256 of the release tarball
+        id: sha
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          URL="https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz"
+          SHA="$(curl -fsSL "$URL" | shasum -a 256 | awk '{print $1}')"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: pihitpihit/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Update Formula/ppcm.rb
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.ver.outputs.tag }}"
+          VERSION="${{ steps.ver.outputs.version }}"
+          SHA="${{ steps.sha.outputs.sha }}"
+          F="tap/Formula/ppcm.rb"
+          sed -i \
+            -e "s|archive/refs/tags/v[0-9][0-9.]*\.tar\.gz|archive/refs/tags/${TAG}.tar.gz|" \
+            -e "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA}\"|" \
+            -e "s|assert_match \"ppcm [0-9][0-9.]*\"|assert_match \"ppcm ${VERSION}\"|" \
+            "$F"
+          echo "----- updated formula -----"
+          cat "$F"
+
+      - name: Commit and push to tap
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.ver.outputs.version }}"
+          cd tap
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Formula already up to date; nothing to commit."
+            exit 0
+          fi
+          git add Formula/ppcm.rb
+          git commit -m "ppcm: update to v${VERSION}"
+          git push
+
+  verify:
+    needs: bump-formula
+    runs-on: macos-latest
+    steps:
+      - name: Install from tap and test
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          brew update
+          brew install pihitpihit/tap/ppcm
+          brew test pihitpihit/tap/ppcm
+          OUT="$(ppcm --version)"
+          echo "ppcm --version -> $OUT"
+          [ "$OUT" = "ppcm ${VERSION}" ]
