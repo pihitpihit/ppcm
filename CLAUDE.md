@@ -51,8 +51,12 @@ reads it dynamically via hatchling, and `cli.py` re-exports it for `--version`.
 To release:
 1. Bump `__version__` in `src/ppcm/__init__.py`, commit.
 2. `git tag vX.Y.Z && git push --tags`, then `gh release create vX.Y.Z`.
-3. Update `Formula/ppcm.rb` in `pihitpihit/homebrew-tap` with the new `url` and
-   `sha256` (`curl -fsSL <tarball> | shasum -a 256`), or run `brew bump-formula-pr`.
+3. Update `Formula/ppcm.rb` in the `pihitpihit/homebrew-tap` repo (local clone at
+   `~/workspace/pihit/homebrew-tap`, sibling of this repo) with the new `url` and
+   `sha256` (`curl -fsSL <tarball> | shasum -a 256`), commit and push; or run
+   `brew bump-formula-pr`. Verify with `brew update && brew upgrade ppcm`.
+
+Consumed by the `pihit_env` repo's `setup.sh` (`brew install pihitpihit/tap/ppcm`).
 
 ---
 
